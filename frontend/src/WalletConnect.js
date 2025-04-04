@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { BrowserProvider } from "ethers"; // Updated import
+import { ethers } from "ethers";
 
 const WalletConnect = () => {
   const [account, setAccount] = useState(null);
@@ -7,9 +7,9 @@ const WalletConnect = () => {
   const connectWallet = async () => {
     if (window.ethereum) {
       try {
-        const provider = new BrowserProvider(window.ethereum); // Changed to BrowserProvider
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
         await window.ethereum.request({ method: "eth_requestAccounts" });
-        const signer = await provider.getSigner(); // Added await
+        const signer = provider.getSigner();
         const address = await signer.getAddress();
         setAccount(address);
       } catch (error) {
