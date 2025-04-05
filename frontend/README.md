@@ -1,70 +1,82 @@
-# Getting Started with Create React App
+# GRULL Arbitration System Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+This is the frontend for the GRULL Arbitration System, a decentralized dispute resolution platform.
 
-## Available Scripts
+## Prerequisites
 
-In the project directory, you can run:
+- Node.js (v14 or higher)
+- npm (v6 or higher)
+- MetaMask or another Web3 wallet
 
-### `npm start`
+## Installation
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+1. Clone the repository
+2. Navigate to the frontend directory:
+   ```
+   cd grull/frontend
+   ```
+3. Install dependencies:
+   ```
+   npm install
+   ```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Fixing Common Issues
 
-### `npm test`
+### 1. npm ENOENT Error
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+If you encounter the following error when running `npx hardhat node`:
+```
+npm error code ENOENT
+npm error syscall lstat
+npm error path C:\Users\BIT\AppData\Roaming\npm
+npm error errno -4058
+npm error enoent ENOENT: no such file or directory, lstat 'C:\Users\BIT\AppData\Roaming\npm'
+```
 
-### `npm run build`
+Run the fix script:
+```
+node fix-npm-error.js
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+This will create the missing directory.
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### 2. ethers.js v6 Compatibility Issues
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+If you encounter errors like:
+```
+Error creating dispute: contract runner does not support sending transactions (operation="sendTransaction", code=UNSUPPORTED_OPERATION, version=6.13.5)
+```
 
-### `npm run eject`
+The code has been updated to be compatible with ethers.js v6.13.5. If you still encounter issues, you can try downgrading to ethers.js v5:
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+```
+npm uninstall ethers
+npm install ethers@5.7.2
+```
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+## Running the Application
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+1. Start the development server:
+   ```
+   npm start
+   ```
+2. Open your browser and navigate to `http://localhost:3000`
+3. Connect your wallet using MetaMask or another Web3 wallet
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+## Features
 
-## Learn More
+- Connect/disconnect wallet
+- Stake/unstake GRULL tokens
+- Create disputes
+- Participate as a juror
+- Cast votes on disputes
+- Claim rewards
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+## Contract Addresses
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+The application uses the following contract addresses (configured in `src/config.js`):
 
-### Code Splitting
+- JurorStaking: `0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512`
+- GRULL Token: `0x5FbDB2315678afecb367f032d93F642f64180aa3`
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+Make sure these addresses match your deployed contracts.
