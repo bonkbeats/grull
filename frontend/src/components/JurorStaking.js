@@ -96,9 +96,30 @@ const JurorStaking = () => {
           });
         });
 
-        // Clean up the event listener on component unmount
+        // Add event listener for JurorSelected
+        jurorStakingContract.on('JurorSelected', (disputeId, juror, weight, event) => {
+          console.log('Juror Selected:', { disputeId, juror, weight });
+          
+          setDisputes((prevDisputes) => {
+            return prevDisputes.map(dispute => {
+              if (dispute.id === disputeId) {
+                // Add the new juror to the jurors array if not already present
+                if (!dispute.jurors.includes(juror)) {
+                  return {
+                    ...dispute,
+                    jurors: [...dispute.jurors, juror]
+                  };
+                }
+              }
+              return dispute;
+            });
+          });
+        });
+
+        // Clean up the event listeners on component unmount
         return () => {
           jurorStakingContract.removeAllListeners('DisputeCreated');
+          jurorStakingContract.removeAllListeners('JurorSelected');
         };
       } catch (error) {
         console.error('Error initializing contracts:', error);
@@ -620,10 +641,9 @@ const JurorStaking = () => {
       
       await tx.wait();
       
-      // Reload data
-      await loadContractData();
+      // Refresh the jurors list after selection
+      await refreshDisputeJurors(parsedDisputeId);
       
-      setDisputeId('');
       setDebugInfo('Jurors selected successfully');
     } catch (error) {
       console.error('Error selecting jurors:', error);
@@ -777,6 +797,108 @@ const JurorStaking = () => {
     } catch (error) {
       console.error('Error calculating weight:', error);
       return 1;
+    }
+  };
+
+  // Add a function to refresh jurors for a specific dispute
+  const refreshDisputeJurors = async (disputeId) => {
+    try {
+      if (!contract) return;
+      
+      const jurors = await contract.getJurors(disputeId);
+      
+      setDisputes((prevDisputes) => {
+        return prevDisputes.map(dispute => {
+          if (dispute.id === disputeId) {
+            return {
+              ...dispute,
+              jurors: jurors
+            };
+          }
+          return dispute;
+        });
+      });
+    } catch (error) {
+      console.error('Error refreshing dispute jurors:', error);
+      setError(`Error refreshing dispute jurors: ${error.message}`);
+    }
+  };
+
+  // End dispute early
+  const endDisputeEarly = async (disputeId, disputantWon) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo(`Ending dispute ${disputeId} early...`);
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      // Get signer from library
+      const signer = await library.getSigner();
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      // Convert dispute ID to a number to avoid BigInt issues
+      const parsedDisputeId = parseInt(disputeId, 10);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.endDisputeEarly(parsedDisputeId, disputantWon);
+      setDebugInfo('End dispute transaction sent, waiting for confirmation...');
+      
+      await tx.wait();
+      
+      // Refresh disputes
+      await loadContractData();
+      
+      setDebugInfo('Dispute ended successfully');
+    } catch (error) {
+      console.error('Error ending dispute:', error);
+      setError(`Error ending dispute: ${error.message}`);
+      setDebugInfo(`Error ending dispute: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // Distribute rewards evenly
+  const distributeRewardsEvenly = async (disputeId) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo(`Distributing rewards evenly for dispute ${disputeId}...`);
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      // Get signer from library
+      const signer = await library.getSigner();
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      // Convert dispute ID to a number to avoid BigInt issues
+      const parsedDisputeId = parseInt(disputeId, 10);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.distributeRewardsEvenly(parsedDisputeId);
+      setDebugInfo('Distribute rewards transaction sent, waiting for confirmation...');
+      
+      await tx.wait();
+      
+      // Refresh disputes
+      await loadContractData();
+      
+      setDebugInfo('Rewards distributed successfully');
+    } catch (error) {
+      console.error('Error distributing rewards:', error);
+      setError(`Error distributing rewards: ${error.message}`);
+      setDebugInfo(`Error distributing rewards: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -967,6 +1089,29 @@ const JurorStaking = () => {
                             disabled={isLoading}
                           >
                             Vote for Defendant
+                          </button>
+                        </div>
+                      )}
+                      
+                      {!dispute.resolved && dispute.jurors.length > 0 && (
+                        <div className="dispute-actions">
+                          <button
+                            onClick={() => endDisputeEarly(dispute.id, true)}
+                            disabled={isLoading}
+                          >
+                            End Dispute (Disputant Wins)
+                          </button>
+                          <button
+                            onClick={() => endDisputeEarly(dispute.id, false)}
+                            disabled={isLoading}
+                          >
+                            End Dispute (Defendant Wins)
+                          </button>
+                          <button
+                            onClick={() => distributeRewardsEvenly(dispute.id)}
+                            disabled={isLoading}
+                          >
+                            Distribute Rewards Evenly
                           </button>
                         </div>
                       )}

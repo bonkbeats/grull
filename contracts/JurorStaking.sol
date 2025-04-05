@@ -190,6 +190,48 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         emit DisputeResolved(_disputeId, disputantWon);
     }
     
+    /**
+     * @dev End dispute early and distribute rewards (for testing purposes)
+     * @param _disputeId ID of the dispute to end
+     * @param _disputantWon True if the disputant should win
+     */
+    function endDisputeEarly(uint256 _disputeId, bool _disputantWon) external {
+        Dispute storage dispute = disputes[_disputeId];
+        require(!dispute.resolved, "Dispute already resolved");
+        require(dispute.jurors.length > 0, "No jurors selected");
+        
+        // Mark dispute as resolved
+        dispute.resolved = true;
+        
+        // Distribute rewards and penalties
+        distributeRewardsAndPenalties(_disputeId, _disputantWon);
+        
+        emit DisputeResolved(_disputeId, _disputantWon);
+    }
+    
+    /**
+     * @dev Distribute rewards evenly among all jurors (for testing purposes)
+     * @param _disputeId ID of the dispute
+     */
+    function distributeRewardsEvenly(uint256 _disputeId) external {
+        Dispute storage dispute = disputes[_disputeId];
+        require(!dispute.resolved, "Dispute already resolved");
+        require(dispute.jurors.length > 0, "No jurors selected");
+        
+        // Mark dispute as resolved
+        dispute.resolved = true;
+        
+        // Calculate reward per juror
+        uint256 rewardPerJuror = dispute.reward / dispute.jurors.length;
+        
+        // Distribute rewards evenly
+        for (uint256 i = 0; i < dispute.jurors.length; i++) {
+            address juror = dispute.jurors[i];
+            jurorRewards[juror] += rewardPerJuror;
+        }
+        
+        emit DisputeResolved(_disputeId, true); // Arbitrarily set to true
+    }
    
     function claimRewards() external nonReentrant {
         uint256 reward = jurorRewards[msg.sender];
