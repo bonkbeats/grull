@@ -48,12 +48,6 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         uint256 disputantVotes;
         uint256 defendantVotes;
         address[] jurors;
-        // New fields for verification
-        string disputeReason;
-        string commitment;
-        bool disputantVerified;
-        bool defendantVerified;
-        bool verificationComplete;
     }
     
     // Mappings
@@ -72,7 +66,6 @@ contract JurorStaking is Ownable, ReentrancyGuard {
     event JurorSelected(uint256 indexed disputeId, address juror, uint256 weight);
     event VoteCast(uint256 indexed disputeId, address juror, bool forDisputant);
     event RewardClaimed(address juror, uint256 amount);
-    event DisputeVerified(uint256 indexed disputeId);
     
     constructor(address _grullToken, uint256 _minimumStake) {
         grullToken = IERC20(_grullToken);
@@ -116,12 +109,7 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         emit Unstaked(msg.sender, _amount);
     }
     
-    function createDispute(
-        address _defendant, 
-        uint256 _reward,
-        string memory _disputeReason,
-        string memory _commitment
-    ) external nonReentrant {
+    function createDispute(address _defendant, uint256 _reward) external nonReentrant {
         require(_defendant != msg.sender, "Cannot dispute yourself");
         require(grullToken.transferFrom(msg.sender, address(this), _reward), "Transfer failed");
         
@@ -135,11 +123,6 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         dispute.reward = _reward;
         dispute.deadline = block.timestamp + 7 days;
         dispute.resolved = false;
-        dispute.disputeReason = _disputeReason;
-        dispute.commitment = _commitment;
-        dispute.disputantVerified = true; // Disputant automatically verifies by creating
-        dispute.defendantVerified = false;
-        dispute.verificationComplete = false;
         
         emit DisputeCreated(disputeId, msg.sender, _defendant, _reward);
     }
@@ -148,7 +131,6 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         Dispute storage dispute = disputes[_disputeId];
         require(!dispute.resolved, "Dispute already resolved");
         require(dispute.jurors.length == 0, "Jurors already selected");
-        require(dispute.verificationComplete, "Dispute not verified by both parties");
         
         // This is a simplified version. In a real implementation, you would use a more
         // sophisticated random selection mechanism, possibly with Chainlink VRF
@@ -381,46 +363,5 @@ contract JurorStaking is Ownable, ReentrancyGuard {
                 }
             }
         }
-    }
-    
-    function verifyDispute(uint256 _disputeId) external {
-        Dispute storage dispute = disputes[_disputeId];
-        require(msg.sender == dispute.defendant, "Only defendant can verify");
-        require(!dispute.defendantVerified, "Already verified");
-        require(!dispute.verificationComplete, "Verification already complete");
-        
-        dispute.defendantVerified = true;
-        dispute.verificationComplete = true;
-        
-        emit DisputeVerified(_disputeId);
-    }
-
-    function getDisputeDetails(uint256 _disputeId) external view returns (
-        uint256 id,
-        address disputant,
-        address defendant,
-        uint256 reward,
-        uint256 deadline,
-        bool resolved,
-        string memory disputeReason,
-        string memory commitment,
-        bool disputantVerified,
-        bool defendantVerified,
-        bool verificationComplete
-    ) {
-        Dispute storage dispute = disputes[_disputeId];
-        return (
-            dispute.id,
-            dispute.disputant,
-            dispute.defendant,
-            dispute.reward,
-            dispute.deadline,
-            dispute.resolved,
-            dispute.disputeReason,
-            dispute.commitment,
-            dispute.disputantVerified,
-            dispute.defendantVerified,
-            dispute.verificationComplete
-        );
     }
 } 

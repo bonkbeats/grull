@@ -20,6 +20,8 @@ const JurorStaking = () => {
   const [defendantAddress, setDefendantAddress] = useState('');
   const [reward, setReward] = useState('');
   const [disputeId, setDisputeId] = useState('');
+  const [disputeReason, setDisputeReason] = useState('');
+  const [commitment, setCommitment] = useState('');
   const [jurorRewards, setJurorRewards] = useState('0');
   const [isApproved, setIsApproved] = useState(false);
   const [error, setError] = useState(null);
@@ -49,6 +51,9 @@ const JurorStaking = () => {
         setContract(jurorStakingContract);
         setTokenContract(tokenContractInstance);
         setDebugInfo('Contracts initialized successfully');
+
+        // Verify the contract's ABI
+        verifyContractABI(jurorStakingContract);
 
         // Add event listener for DisputeCreated
         jurorStakingContract.on('DisputeCreated', (disputeId, disputant, defendant, reward, event) => {
@@ -107,6 +112,29 @@ const JurorStaking = () => {
       }
     }
   }, [active, library]);
+
+  // Verify the contract's ABI against the actual contract
+  const verifyContractABI = async (contractInstance) => {
+    try {
+      setDebugInfo('Verifying contract ABI...');
+      
+      // Check if createDispute has the correct number of parameters
+      const createDisputeFunction = contractInstance.interface.getFunction('createDispute');
+      const paramCount = createDisputeFunction.inputs.length;
+      
+      setDebugInfo(`createDispute function has ${paramCount} parameters`);
+      
+      if (paramCount !== 4) {
+        setDebugInfo('WARNING: createDispute function in ABI does not match the contract. Expected 4 parameters, found ' + paramCount);
+        setError('Contract ABI mismatch detected. Please update the ABI file.');
+      } else {
+        setDebugInfo('Contract ABI verification successful');
+      }
+    } catch (error) {
+      console.error('Error verifying contract ABI:', error);
+      setDebugInfo(`Error verifying contract ABI: ${error.message}`);
+    }
+  };
 
   // Load user-specific data
   const loadUserData = useCallback(async () => {
@@ -188,62 +216,39 @@ const JurorStaking = () => {
   // Load contract-wide data
   const loadContractData = useCallback(async () => {
     try {
+      if (!contract) return;
+      
       setDebugInfo('Loading contract data...');
-      if (!contract) {
-        setDebugInfo('Cannot load contract data: contract is missing');
-        return;
-      }
       
-      setDebugInfo('Getting total staked amount...');
-      // Get total staked amount
-      let total;
-      try {
-        total = await contract.totalStaked();
-        setTotalStaked(ethers.formatEther(total));
-      } catch (error) {
-        console.error('Error getting total staked amount:', error);
-        setDebugInfo('Error getting total staked amount, using 0 as fallback');
-        setTotalStaked('0');
-      }
+      // Load basic contract data
+      const [totalStakedValue, minimumStakeValue] = await Promise.all([
+        contract.totalStaked(),
+        contract.minimumStake()
+      ]);
       
-      setDebugInfo('Getting minimum stake requirement...');
-      // Get minimum stake requirement
-      let min;
-      try {
-        min = await contract.minimumStake();
-        setMinimumStake(ethers.formatEther(min));
-      } catch (error) {
-        console.error('Error getting minimum stake requirement:', error);
-        setDebugInfo('Error getting minimum stake requirement, using 0 as fallback');
-        setMinimumStake('0');
-      }
+      setTotalStaked(ethers.formatEther(totalStakedValue));
+      setMinimumStake(ethers.formatEther(minimumStakeValue));
       
-      setDebugInfo('Getting dispute count...');
-      // Get dispute count
-      let disputeCount;
-      try {
-        disputeCount = await contract.getDisputeCount();
-      } catch (error) {
-        console.error('Error getting dispute count:', error);
-        setDebugInfo('Error getting dispute count, using 0 as fallback');
-        disputeCount = 0;
+      // Load user data if connected
+      if (account) {
+        await loadUserData();
       }
       
       // Load disputes
+      const disputeCount = await contract.getDisputeCount();
       const loadedDisputes = [];
+      
       for (let i = 0; i < disputeCount; i++) {
         try {
-          const dispute = await contract.disputes(i);
+          const disputeDetails = await contract.getDisputeDetails(i);
           
           // Get the jurors array for this dispute
           let jurors = [];
           try {
-            // Try to get the jurors array directly
             jurors = await contract.getJurors(i);
           } catch (error) {
             console.error(`Error getting jurors for dispute ${i}:`, error);
-            // If that fails, try to get each juror individually
-            for (let j = 0; j < 5; j++) { // Assuming max 5 jurors
+            for (let j = 0; j < 5; j++) {
               try {
                 const juror = await contract.getJuror(i, j);
                 if (juror !== ethers.ZeroAddress) {
@@ -256,15 +261,20 @@ const JurorStaking = () => {
           }
           
           loadedDisputes.push({
-            id: dispute.id,
-            disputant: dispute.disputant,
-            defendant: dispute.defendant,
-            reward: ethers.formatEther(dispute.reward),
-            deadline: new Date(dispute.deadline * 1000).toLocaleString(),
-            resolved: dispute.resolved,
-            disputantVotes: dispute.disputantVotes.toString(),
-            defendantVotes: dispute.defendantVotes.toString(),
-            jurors: jurors
+            id: disputeDetails.id,
+            disputant: disputeDetails.disputant,
+            defendant: disputeDetails.defendant,
+            reward: ethers.formatEther(disputeDetails.reward),
+            deadline: new Date(disputeDetails.deadline * 1000).toLocaleString(),
+            resolved: disputeDetails.resolved,
+            disputantVotes: disputeDetails.disputantVotes.toString(),
+            defendantVotes: disputeDetails.defendantVotes.toString(),
+            jurors: jurors,
+            disputeReason: disputeDetails.disputeReason,
+            commitment: disputeDetails.commitment,
+            disputantVerified: disputeDetails.disputantVerified,
+            defendantVerified: disputeDetails.defendantVerified,
+            verificationComplete: disputeDetails.verificationComplete
           });
         } catch (error) {
           console.error(`Error loading dispute ${i}:`, error);
@@ -279,7 +289,7 @@ const JurorStaking = () => {
       setError(`Error loading contract data: ${error.message}`);
       setDebugInfo(`Error loading contract data: ${error.message}`);
     }
-  }, [contract]);
+  }, [contract, account, loadUserData]);
 
   // Load data when contracts are initialized
   useEffect(() => {
@@ -499,8 +509,8 @@ const JurorStaking = () => {
         throw new Error('Contract, account, or library not available');
       }
       
-      if (!defendantAddress || !reward) {
-        throw new Error('Defendant address and reward are required');
+      if (!defendantAddress || !reward || !disputeReason || !commitment) {
+        throw new Error('All fields are required');
       }
       
       // Get signer from library
@@ -513,8 +523,35 @@ const JurorStaking = () => {
       const rewardAmount = ethers.parseEther(reward);
       setDebugInfo(`Creating dispute with defendant ${defendantAddress} and reward ${reward}...`);
       
-      // Use the signer to send the transaction
-      const tx = await contractWithSigner.createDispute(defendantAddress, rewardAmount);
+      // Log the function signature for debugging
+      setDebugInfo(`Function signature: createDispute(address,uint256,string,string)`);
+      
+      // Try to call the function with the updated signature
+      let tx;
+      try {
+        // First attempt with the updated signature (4 parameters)
+        tx = await contractWithSigner.createDispute(
+          defendantAddress, 
+          rewardAmount,
+          disputeReason,
+          commitment
+        );
+      } catch (error) {
+        // If that fails, try with the old signature (2 parameters)
+        setDebugInfo('First attempt failed, trying with old signature...');
+        try {
+          tx = await contractWithSigner.createDispute(
+            defendantAddress, 
+            rewardAmount
+          );
+          // If this succeeds, we need to update the ABI
+          setDebugInfo('Success with old signature. Please update the contract ABI.');
+        } catch (secondError) {
+          // If both attempts fail, throw the original error
+          throw error;
+        }
+      }
+      
       setDebugInfo('Dispute creation transaction sent, waiting for confirmation...');
       
       // Wait for the transaction to be mined
@@ -568,7 +605,12 @@ const JurorStaking = () => {
             resolved: false,
             disputantVotes: '0',
             defendantVotes: '0',
-            jurors: []
+            jurors: [],
+            disputeReason: disputeReason,
+            commitment: commitment,
+            disputantVerified: true,
+            defendantVerified: false,
+            verificationComplete: false
           }
         ]);
       } else {
@@ -577,8 +619,11 @@ const JurorStaking = () => {
         await loadContractData();
       }
       
+      // Clear form fields
       setDefendantAddress('');
       setReward('');
+      setDisputeReason('');
+      setCommitment('');
       setDebugInfo('Dispute created successfully');
     } catch (error) {
       console.error('Error creating dispute:', error);
@@ -780,6 +825,42 @@ const JurorStaking = () => {
     }
   };
 
+  // Verify a dispute
+  const verifyDispute = async (disputeId) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo(`Verifying dispute ${disputeId}...`);
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      // Get signer from library
+      const signer = await library.getSigner();
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.verifyDispute(disputeId);
+      setDebugInfo('Verification transaction sent, waiting for confirmation...');
+      
+      await tx.wait();
+      
+      // Reload data
+      await loadContractData();
+      
+      setDebugInfo('Dispute verified successfully');
+    } catch (error) {
+      console.error('Error verifying dispute:', error);
+      setError(`Error verifying dispute: ${error.message}`);
+      setDebugInfo(`Error verifying dispute: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="juror-staking">
       <h2>GRULL Juror Staking</h2>
@@ -903,9 +984,23 @@ const JurorStaking = () => {
                   placeholder="Reward Amount"
                   disabled={isLoading}
                 />
+                <input
+                  type="text"
+                  value={disputeReason}
+                  onChange={(e) => setDisputeReason(e.target.value)}
+                  placeholder="Dispute Reason"
+                  disabled={isLoading}
+                />
+                <input
+                  type="text"
+                  value={commitment}
+                  onChange={(e) => setCommitment(e.target.value)}
+                  placeholder="Commitment"
+                  disabled={isLoading}
+                />
                 <button
                   onClick={createDispute}
-                  disabled={isLoading || !defendantAddress || !reward}
+                  disabled={isLoading || !defendantAddress || !reward || !disputeReason || !commitment}
                 >
                   {isLoading ? 'Creating...' : 'Create Dispute'}
                 </button>
@@ -951,10 +1046,45 @@ const JurorStaking = () => {
                       <p><strong>Reward:</strong> {dispute.reward} GRULL</p>
                       <p><strong>Deadline:</strong> {dispute.deadline}</p>
                       <p><strong>Status:</strong> {dispute.resolved ? 'Resolved' : 'Active'}</p>
+                      <div className="dispute-details">
+                        <h6>Dispute Details</h6>
+                        <p><strong>Reason:</strong> {dispute.disputeReason}</p>
+                        <p><strong>Commitment:</strong> {dispute.commitment}</p>
+                        <div className="verification-status">
+                          <p>
+                            <strong>Verification Status:</strong>
+                            <span className={`status ${dispute.verificationComplete ? 'complete' : 'pending'}`}>
+                              {dispute.verificationComplete ? 'Complete' : 'Pending'}
+                            </span>
+                          </p>
+                          <p>
+                            <strong>Disputant Verified:</strong>
+                            <span className={`status ${dispute.disputantVerified ? 'verified' : 'unverified'}`}>
+                              {dispute.disputantVerified ? 'Yes' : 'No'}
+                            </span>
+                          </p>
+                          <p>
+                            <strong>Defendant Verified:</strong>
+                            <span className={`status ${dispute.defendantVerified ? 'verified' : 'unverified'}`}>
+                              {dispute.defendantVerified ? 'Yes' : 'No'}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
                       <p><strong>Disputant Votes:</strong> {dispute.disputantVotes}</p>
                       <p><strong>Defendant Votes:</strong> {dispute.defendantVotes}</p>
                       
-                      {!dispute.resolved && dispute.jurors.includes(account) && (
+                      {!dispute.resolved && !dispute.verificationComplete && account === dispute.defendant && (
+                        <button
+                          onClick={() => verifyDispute(dispute.id)}
+                          disabled={isLoading}
+                          className="verify-button"
+                        >
+                          {isLoading ? 'Verifying...' : 'Verify Dispute'}
+                        </button>
+                      )}
+                      
+                      {!dispute.resolved && dispute.verificationComplete && dispute.jurors.includes(account) && (
                         <div className="voting-actions">
                           <button
                             onClick={() => castVote(dispute.id, true)}

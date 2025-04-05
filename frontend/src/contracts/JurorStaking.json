@@ -223,6 +223,16 @@
           "internalType": "uint256",
           "name": "_reward",
           "type": "uint256"
+        },
+        {
+          "internalType": "string",
+          "name": "_disputeReason",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_commitment",
+          "type": "string"
         }
       ],
       "name": "createDispute",
