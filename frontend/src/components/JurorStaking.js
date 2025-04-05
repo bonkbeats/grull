@@ -49,6 +49,30 @@ const JurorStaking = () => {
         setContract(jurorStakingContract);
         setTokenContract(tokenContractInstance);
         setDebugInfo('Contracts initialized successfully');
+
+        // Add event listener for DisputeCreated
+        jurorStakingContract.on('DisputeCreated', (disputeId, disputant, defendant, reward) => {
+          console.log('Dispute Created:', disputeId);
+          setDisputes((prevDisputes) => [
+            ...prevDisputes,
+            {
+              id: disputeId,
+              disputant,
+              defendant,
+              reward: ethers.formatEther(reward),
+              deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleString(),
+              resolved: false,
+              disputantVotes: 0,
+              defendantVotes: 0,
+              jurors: []
+            }
+          ]);
+        });
+
+        // Clean up the event listener on component unmount
+        return () => {
+          jurorStakingContract.removeAllListeners('DisputeCreated');
+        };
       } catch (error) {
         console.error('Error initializing contracts:', error);
         setError(`Error initializing contracts: ${error.message}`);
