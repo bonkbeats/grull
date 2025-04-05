@@ -1,20 +1,31 @@
 import React from 'react';
 import { Web3ReactProvider } from '@web3-react/core';
-import { BrowserProvider } from 'ethers';
+import { ethers } from 'ethers';
 import JurorStaking from './components/JurorStaking';
+import WalletConnect from './WalletConnect';
+import { getLibrary, configureProvider } from './utils/web3React';
 import './App.css';
 
-// This function is used by Web3React to create an ethers provider
-// It's compatible with ethers v6.x
-function getLibrary(provider) {
-  return new BrowserProvider(provider);
-}
+// Configure the provider
+const getLibraryWithConfig = (provider) => {
+  const configuredProvider = configureProvider(provider);
+  return getLibrary(configuredProvider);
+};
 
 function App() {
   return (
-    <Web3ReactProvider getLibrary={getLibrary}>
+    <Web3ReactProvider getLibrary={getLibraryWithConfig}>
       <div className="App">
-        <JurorStaking />
+        <header className="App-header">
+          <h1>GRULL Arbitration System</h1>
+        </header>
+        <main className="App-main">
+          <WalletConnect />
+          <JurorStaking />
+        </main>
+        <footer className="App-footer">
+          <p>GRULL Arbitration System &copy; {new Date().getFullYear()}</p>
+        </footer>
       </div>
     </Web3ReactProvider>
   );
