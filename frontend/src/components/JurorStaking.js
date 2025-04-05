@@ -51,22 +51,49 @@ const JurorStaking = () => {
         setDebugInfo('Contracts initialized successfully');
 
         // Add event listener for DisputeCreated
-        jurorStakingContract.on('DisputeCreated', (disputeId, disputant, defendant, reward) => {
-          console.log('Dispute Created:', disputeId);
-          setDisputes((prevDisputes) => [
-            ...prevDisputes,
-            {
-              id: disputeId,
-              disputant,
-              defendant,
-              reward: ethers.formatEther(reward),
-              deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleString(),
-              resolved: false,
-              disputantVotes: 0,
-              defendantVotes: 0,
-              jurors: []
-            }
-          ]);
+        jurorStakingContract.on('DisputeCreated', (disputeId, disputant, defendant, reward, event) => {
+          console.log('Dispute Created:', { disputeId, disputant, defendant, reward });
+          
+          // Handle both ethers v5 and v6 event formats
+          let parsedDisputeId, parsedDisputant, parsedDefendant, parsedReward;
+          
+          if (typeof disputeId === 'object' && disputeId.args) {
+            // ethers v5 format with event object
+            parsedDisputeId = disputeId.args.disputeId;
+            parsedDisputant = disputeId.args.disputant;
+            parsedDefendant = disputeId.args.defendant;
+            parsedReward = disputeId.args.reward;
+          } else {
+            // ethers v6 format or v5 with separate arguments
+            parsedDisputeId = disputeId;
+            parsedDisputant = disputant;
+            parsedDefendant = defendant;
+            parsedReward = reward;
+          }
+          
+          setDisputes((prevDisputes) => {
+            // Check if dispute already exists
+            const exists = prevDisputes.some(d => d.id === parsedDisputeId);
+            if (exists) return prevDisputes;
+            
+            // Set the dispute ID state variable
+            setDisputeId(parsedDisputeId.toString());
+            
+            return [
+              ...prevDisputes,
+              {
+                id: parsedDisputeId,
+                disputant: parsedDisputant, 
+                defendant: parsedDefendant,
+                reward: ethers.formatEther(parsedReward),
+                deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleString(),
+                resolved: false,
+                disputantVotes: '0',
+                defendantVotes: '0',
+                jurors: []
+              }
+            ];
+          });
         });
 
         // Clean up the event listener on component unmount
@@ -139,23 +166,35 @@ const JurorStaking = () => {
       
       setDebugInfo('Getting dispute count...');
       // Get dispute count
-      const disputeCount = await contract.getDisputeCount();
+      let disputeCount;
+      try {
+        disputeCount = await contract.getDisputeCount();
+      } catch (error) {
+        console.error('Error getting dispute count:', error);
+        setDebugInfo('Error getting dispute count, using 0 as fallback');
+        disputeCount = 0;
+      }
       
       // Load disputes
       const loadedDisputes = [];
       for (let i = 0; i < disputeCount; i++) {
-        const dispute = await contract.disputes(i);
-        loadedDisputes.push({
-          id: i,
-          disputant: dispute.disputant,
-          defendant: dispute.defendant,
-          reward: ethers.formatEther(dispute.reward),
-          deadline: new Date(dispute.deadline * 1000).toLocaleString(),
-          resolved: dispute.resolved,
-          disputantVotes: dispute.disputantVotes.toString(),
-          defendantVotes: dispute.defendantVotes.toString(),
-          jurors: dispute.jurors
-        });
+        try {
+          const dispute = await contract.disputes(i);
+          loadedDisputes.push({
+            id: dispute.id,
+            disputant: dispute.disputant,
+            defendant: dispute.defendant,
+            reward: ethers.formatEther(dispute.reward),
+            deadline: new Date(dispute.deadline * 1000).toLocaleString(),
+            resolved: dispute.resolved,
+            disputantVotes: dispute.disputantVotes.toString(),
+            defendantVotes: dispute.defendantVotes.toString(),
+            jurors: dispute.jurors
+          });
+        } catch (error) {
+          console.error(`Error loading dispute ${i}:`, error);
+          setDebugInfo(`Error loading dispute ${i}, skipping`);
+        }
       }
       
       setDisputes(loadedDisputes);
@@ -328,10 +367,65 @@ const JurorStaking = () => {
       const tx = await contractWithSigner.createDispute(defendantAddress, rewardAmount);
       setDebugInfo('Dispute creation transaction sent, waiting for confirmation...');
       
-      await tx.wait();
+      // Wait for the transaction to be mined
+      const receipt = await tx.wait();
+      setDebugInfo('Transaction confirmed, processing receipt...');
       
-      // Reload data
-      await loadContractData();
+      // Get the dispute ID from the event - handle different ethers.js versions
+      let disputeId;
+      
+      // Check if we're using ethers v6 (which has a different event structure)
+      if (receipt.logs) {
+        // ethers v6 format
+        setDebugInfo('Using ethers v6 format for events');
+        const disputeCreatedLog = receipt.logs.find(log => {
+          try {
+            const parsedLog = contract.interface.parseLog(log);
+            return parsedLog && parsedLog.name === 'DisputeCreated';
+          } catch (e) {
+            return false;
+          }
+        });
+        
+        if (disputeCreatedLog) {
+          const parsedLog = contract.interface.parseLog(disputeCreatedLog);
+          disputeId = parsedLog.args.disputeId;
+        }
+      } else if (receipt.events) {
+        // ethers v5 format
+        setDebugInfo('Using ethers v5 format for events');
+        const disputeCreatedEvent = receipt.events.find(event => event.event === 'DisputeCreated');
+        if (disputeCreatedEvent) {
+          disputeId = disputeCreatedEvent.args.disputeId;
+        }
+      }
+      
+      if (disputeId !== undefined) {
+        setDebugInfo(`Dispute created with ID: ${disputeId}`);
+        
+        // Set the dispute ID state variable
+        setDisputeId(disputeId.toString());
+        
+        // Add the new dispute to the state
+        setDisputes(prevDisputes => [
+          ...prevDisputes,
+          {
+            id: disputeId,
+            disputant: account,
+            defendant: defendantAddress,
+            reward: reward,
+            deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleString(),
+            resolved: false,
+            disputantVotes: '0',
+            defendantVotes: '0',
+            jurors: []
+          }
+        ]);
+      } else {
+        setDebugInfo('Could not extract dispute ID from transaction receipt');
+        // Fallback: reload all disputes
+        await loadContractData();
+      }
       
       setDefendantAddress('');
       setReward('');
