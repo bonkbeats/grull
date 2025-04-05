@@ -55,6 +55,9 @@ contract JurorStaking is Ownable, ReentrancyGuard {
     mapping(uint256 => Dispute) public disputes;
     mapping(address => uint256) public jurorRewards;
     
+    // Array to track staker addresses
+    address[] private _stakerAddresses;
+    
     // Events
     event Staked(address indexed user, uint256 amount);
     event Unstaked(address indexed user, uint256 amount);
@@ -78,6 +81,11 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         userStake.amount += _amount;
         userStake.lastActive = block.timestamp;
         userStake.isActive = true;
+        
+        // Add to staker addresses if not already there
+        if (userStake.amount == _amount) { // This is a new staker
+            _stakerAddresses.push(msg.sender);
+        }
         
         totalStaked += _amount;
         
@@ -205,15 +213,37 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         }
     }
     
-    
+    /**
+     * @dev Returns a list of active jurors
+     * @return Array of active juror addresses
+     */
     function getActiveJurors() public view returns (address[] memory) {
-        // This is a simplified implementation
-        // In a real implementation, you would iterate through all stakers and return those with active stakes
+        // Count the number of active stakers
+        uint256 activeCount = 0;
+        for (uint256 i = 0; i < _stakerAddresses.length; i++) {
+            if (stakes[_stakerAddresses[i]].isActive) {
+                activeCount++;
+            }
+        }
         
-        // For now, we'll return a dummy array with the contract owner as the only active juror
-        // This is just for testing purposes
-        address[] memory activeJurors = new address[](1);
-        activeJurors[0] = owner();
+        // If no active stakers, return the owner as a fallback
+        if (activeCount == 0) {
+            address[] memory activeJurors = new address[](1);
+            activeJurors[0] = owner();
+            return activeJurors;
+        }
+        
+        // Create an array of the right size
+        address[] memory activeJurors = new address[](activeCount);
+        
+        // Fill the array with active staker addresses
+        uint256 index = 0;
+        for (uint256 i = 0; i < _stakerAddresses.length; i++) {
+            if (stakes[_stakerAddresses[i]].isActive) {
+                activeJurors[index] = _stakerAddresses[i];
+                index++;
+            }
+        }
         
         return activeJurors;
     }
@@ -234,6 +264,30 @@ contract JurorStaking is Ownable, ReentrancyGuard {
      */
     function getDisputeCount() public view returns (uint256) {
         return _disputeIds.current();
+    }
+    
+    /**
+     * @dev Returns the jurors for a dispute
+     * @param _disputeId ID of the dispute
+     * @return Array of juror addresses
+     */
+    function getJurors(uint256 _disputeId) public view returns (address[] memory) {
+        Dispute storage dispute = disputes[_disputeId];
+        return dispute.jurors;
+    }
+    
+    /**
+     * @dev Returns a specific juror for a dispute
+     * @param _disputeId ID of the dispute
+     * @param _index Index of the juror in the array
+     * @return Address of the juror
+     */
+    function getJuror(uint256 _disputeId, uint256 _index) public view returns (address) {
+        Dispute storage dispute = disputes[_disputeId];
+        if (_index >= dispute.jurors.length) {
+            return address(0);
+        }
+        return dispute.jurors[_index];
     }
     
     /**

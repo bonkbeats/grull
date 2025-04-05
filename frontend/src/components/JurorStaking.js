@@ -113,29 +113,69 @@ const JurorStaking = () => {
     try {
       setDebugInfo('Loading user data...');
       if (!contract || !account || !tokenContract) {
-        setDebugInfo('Cannot load user data: contract, account, or tokenContract is missing');
+        setDebugInfo('Cannot load user data: contract, account, or token contract is missing');
         return;
       }
       
       setDebugInfo('Getting user stake...');
-      // Get user's stake
-      const stake = await contract.stakes(account);
-      setUserStake(ethers.formatEther(stake.amount));
+      // Get user stake
+      let userStake;
+      try {
+        userStake = await contract.stakes(account);
+        setUserStake(ethers.formatEther(userStake.amount));
+      } catch (error) {
+        console.error('Error getting user stake:', error);
+        setDebugInfo('Error getting user stake, using 0 as fallback');
+        setUserStake('0');
+      }
       
       setDebugInfo('Getting user token balance...');
-      // Get user's token balance
-      const balance = await tokenContract.balanceOf(account);
-      setUserBalance(ethers.formatEther(balance));
+      // Get user token balance
+      let userBalance;
+      try {
+        userBalance = await tokenContract.balanceOf(account);
+        setUserBalance(ethers.formatEther(userBalance));
+      } catch (error) {
+        console.error('Error getting user token balance:', error);
+        setDebugInfo('Error getting user token balance, using 0 as fallback');
+        setUserBalance('0');
+      }
       
-      setDebugInfo('Getting user rewards...');
-      // Get user's rewards
-      const rewards = await contract.jurorRewards(account);
-      setJurorRewards(ethers.formatEther(rewards));
+      setDebugInfo('Getting juror rewards...');
+      // Get juror rewards
+      let rewards;
+      try {
+        rewards = await contract.jurorRewards(account);
+        setJurorRewards(ethers.formatEther(rewards));
+      } catch (error) {
+        console.error('Error getting juror rewards:', error);
+        setDebugInfo('Error getting juror rewards, using 0 as fallback');
+        setJurorRewards('0');
+      }
       
       setDebugInfo('Checking token approval...');
-      // Check if tokens are approved for staking
-      const allowance = await tokenContract.allowance(account, JUROR_STAKING_ADDRESS);
-      setIsApproved(allowance > 0);
+      // Check if token is approved for staking
+      try {
+        const stakingAddress = await contract.getAddress();
+        const allowance = await tokenContract.allowance(account, stakingAddress);
+        const formattedAllowance = ethers.formatEther(allowance);
+        
+        // Always update the approval state based on current allowance and stake amount
+        if (stakeAmount && !isNaN(parseFloat(stakeAmount)) && parseFloat(stakeAmount) > 0) {
+          const stakeAmountBN = ethers.parseEther(stakeAmount);
+          const isApprovedAmount = allowance >= stakeAmountBN;
+          setIsApproved(isApprovedAmount);
+          setDebugInfo(`Current allowance: ${formattedAllowance} GRULL, Required: ${stakeAmount} GRULL, Approved: ${isApprovedAmount}`);
+        } else {
+          // If no valid stake amount, set isApproved to false to require explicit approval
+          setIsApproved(false);
+          setDebugInfo(`Current allowance: ${formattedAllowance} GRULL, No stake amount entered. Please enter an amount to check approval status.`);
+        }
+      } catch (error) {
+        console.error('Error checking token approval:', error);
+        setDebugInfo('Error checking token approval, assuming not approved');
+        setIsApproved(false);
+      }
       
       setDebugInfo('User data loaded successfully');
     } catch (error) {
@@ -143,7 +183,7 @@ const JurorStaking = () => {
       setError(`Error loading user data: ${error.message}`);
       setDebugInfo(`Error loading user data: ${error.message}`);
     }
-  }, [contract, account, tokenContract]);
+  }, [contract, account, tokenContract, stakeAmount]);
 
   // Load contract-wide data
   const loadContractData = useCallback(async () => {
@@ -156,13 +196,27 @@ const JurorStaking = () => {
       
       setDebugInfo('Getting total staked amount...');
       // Get total staked amount
-      const total = await contract.totalStaked();
-      setTotalStaked(ethers.formatEther(total));
+      let total;
+      try {
+        total = await contract.totalStaked();
+        setTotalStaked(ethers.formatEther(total));
+      } catch (error) {
+        console.error('Error getting total staked amount:', error);
+        setDebugInfo('Error getting total staked amount, using 0 as fallback');
+        setTotalStaked('0');
+      }
       
       setDebugInfo('Getting minimum stake requirement...');
       // Get minimum stake requirement
-      const min = await contract.minimumStake();
-      setMinimumStake(ethers.formatEther(min));
+      let min;
+      try {
+        min = await contract.minimumStake();
+        setMinimumStake(ethers.formatEther(min));
+      } catch (error) {
+        console.error('Error getting minimum stake requirement:', error);
+        setDebugInfo('Error getting minimum stake requirement, using 0 as fallback');
+        setMinimumStake('0');
+      }
       
       setDebugInfo('Getting dispute count...');
       // Get dispute count
@@ -180,6 +234,27 @@ const JurorStaking = () => {
       for (let i = 0; i < disputeCount; i++) {
         try {
           const dispute = await contract.disputes(i);
+          
+          // Get the jurors array for this dispute
+          let jurors = [];
+          try {
+            // Try to get the jurors array directly
+            jurors = await contract.getJurors(i);
+          } catch (error) {
+            console.error(`Error getting jurors for dispute ${i}:`, error);
+            // If that fails, try to get each juror individually
+            for (let j = 0; j < 5; j++) { // Assuming max 5 jurors
+              try {
+                const juror = await contract.getJuror(i, j);
+                if (juror !== ethers.ZeroAddress) {
+                  jurors.push(juror);
+                }
+              } catch (e) {
+                // Ignore errors for individual jurors
+              }
+            }
+          }
+          
           loadedDisputes.push({
             id: dispute.id,
             disputant: dispute.disputant,
@@ -189,7 +264,7 @@ const JurorStaking = () => {
             resolved: dispute.resolved,
             disputantVotes: dispute.disputantVotes.toString(),
             defendantVotes: dispute.defendantVotes.toString(),
-            jurors: dispute.jurors
+            jurors: jurors
           });
         } catch (error) {
           console.error(`Error loading dispute ${i}:`, error);
@@ -220,6 +295,18 @@ const JurorStaking = () => {
     }
   }, [contract, tokenContract, account, loadUserData]);
 
+  // Load user data when stake amount changes to update approval state
+  useEffect(() => {
+    if (contract && tokenContract && account && stakeAmount && !isNaN(parseFloat(stakeAmount)) && parseFloat(stakeAmount) > 0) {
+      // Add a small delay to allow the stake amount to be fully updated
+      const timer = setTimeout(() => {
+        loadUserData();
+      }, 300);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [contract, tokenContract, account, stakeAmount, loadUserData]);
+
   // Approve tokens for staking
   const approveTokens = async () => {
     try {
@@ -227,31 +314,73 @@ const JurorStaking = () => {
       setError(null);
       setDebugInfo('Approving tokens...');
       
-      if (!tokenContract || !account || !library) {
-        throw new Error('Token contract, account, or library not available');
+      if (!tokenContract || !contract || !library) {
+        throw new Error('Token contract, staking contract, or library not available');
+      }
+
+      if (!stakeAmount || isNaN(parseFloat(stakeAmount)) || parseFloat(stakeAmount) <= 0) {
+        throw new Error('Please enter a valid stake amount greater than 0');
       }
       
       // Get signer from library
       const signer = await library.getSigner();
       
-      // Create a new contract instance with the signer
+      // Create a new token contract instance with the signer
       const tokenContractWithSigner = tokenContract.connect(signer);
       
+      // Get the staking contract address
+      const stakingAddress = await contract.getAddress();
+      
+      // Parse the approval amount as a string to avoid BigInt issues
       const amount = ethers.parseEther(stakeAmount);
-      setDebugInfo(`Approving ${stakeAmount} tokens for staking contract...`);
+      
+      // Check current allowance
+      const currentAllowance = await tokenContract.allowance(account, stakingAddress);
+      const formattedAllowance = ethers.formatEther(currentAllowance);
+      setDebugInfo(`Current allowance: ${formattedAllowance} GRULL, Required: ${stakeAmount} GRULL`);
+      
+      // If already approved with sufficient amount, skip approval
+      if (currentAllowance >= amount) {
+        setDebugInfo(`Tokens already approved with sufficient amount (${formattedAllowance} GRULL). You can proceed to stake.`);
+        setIsApproved(true);
+        setIsLoading(false);
+        return;
+      }
+      
+      setDebugInfo(`Approving ${stakeAmount} GRULL for staking...`);
       
       // Use the signer to send the transaction
-      const tx = await tokenContractWithSigner.approve(JUROR_STAKING_ADDRESS, amount);
+      const tx = await tokenContractWithSigner.approve(stakingAddress, amount);
       setDebugInfo('Approval transaction sent, waiting for confirmation...');
       
-      await tx.wait();
+      const receipt = await tx.wait();
+      setDebugInfo('Approval transaction confirmed');
       
-      setIsApproved(true);
-      setDebugInfo('Tokens approved successfully');
+      // Check if the approval was successful
+      const newAllowance = await tokenContract.allowance(account, stakingAddress);
+      const formattedNewAllowance = ethers.formatEther(newAllowance);
+      const isApprovedAmount = newAllowance >= amount;
+      setIsApproved(isApprovedAmount);
+      
+      if (isApprovedAmount) {
+        setDebugInfo(`Tokens approved successfully. Allowance: ${formattedNewAllowance} GRULL. You can now stake your tokens.`);
+      } else {
+        throw new Error(`Approval failed. Current allowance: ${formattedNewAllowance} GRULL, Required: ${stakeAmount} GRULL`);
+      }
     } catch (error) {
       console.error('Error approving tokens:', error);
-      setError(`Error approving tokens: ${error.message}`);
+      
+      // Check for user rejection error
+      if (error.code === 'ACTION_REJECTED' || 
+          (error.message && error.message.includes('user rejected')) ||
+          (error.message && error.message.includes('User denied transaction'))) {
+        setError('Transaction was rejected. Please confirm the transaction in MetaMask to approve tokens for staking.');
+      } else {
+        setError(`Error approving tokens: ${error.message}`);
+      }
+      
       setDebugInfo(`Error approving tokens: ${error.message}`);
+      setIsApproved(false);
     } finally {
       setIsLoading(false);
     }
@@ -267,6 +396,14 @@ const JurorStaking = () => {
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
+
+      if (!stakeAmount || isNaN(parseFloat(stakeAmount)) || parseFloat(stakeAmount) <= 0) {
+        throw new Error('Please enter a valid stake amount greater than 0');
+      }
+
+      if (!isApproved) {
+        throw new Error('Please approve tokens before staking');
+      }
       
       // Get signer from library
       const signer = await library.getSigner();
@@ -274,6 +411,7 @@ const JurorStaking = () => {
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
       
+      // Parse the stake amount as a string to avoid BigInt issues
       const amount = ethers.parseEther(stakeAmount);
       setDebugInfo(`Staking ${stakeAmount} tokens...`);
       
@@ -281,7 +419,8 @@ const JurorStaking = () => {
       const tx = await contractWithSigner.stake(amount);
       setDebugInfo('Staking transaction sent, waiting for confirmation...');
       
-      await tx.wait();
+      const receipt = await tx.wait();
+      setDebugInfo('Staking transaction confirmed');
       
       // Reload data
       await loadUserData();
@@ -291,7 +430,16 @@ const JurorStaking = () => {
       setDebugInfo('Tokens staked successfully');
     } catch (error) {
       console.error('Error staking tokens:', error);
-      setError(`Error staking tokens: ${error.message}`);
+      
+      // Check for user rejection error
+      if (error.code === 'ACTION_REJECTED' || 
+          (error.message && error.message.includes('user rejected')) ||
+          (error.message && error.message.includes('User denied transaction'))) {
+        setError('Transaction was rejected. Please confirm the transaction in MetaMask to complete the staking process.');
+      } else {
+        setError(`Error staking tokens: ${error.message}`);
+      }
+      
       setDebugInfo(`Error staking tokens: ${error.message}`);
     } finally {
       setIsLoading(false);
@@ -315,6 +463,7 @@ const JurorStaking = () => {
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
       
+      // Parse the unstake amount as a string to avoid BigInt issues
       const amount = ethers.parseEther(unstakeAmount);
       setDebugInfo(`Unstaking ${unstakeAmount} tokens...`);
       
@@ -360,6 +509,7 @@ const JurorStaking = () => {
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
       
+      // Parse the reward amount as a string to avoid BigInt issues
       const rewardAmount = ethers.parseEther(reward);
       setDebugInfo(`Creating dispute with defendant ${defendantAddress} and reward ${reward}...`);
       
@@ -460,10 +610,12 @@ const JurorStaking = () => {
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
       
+      // Convert dispute ID to a number to avoid BigInt issues
+      const parsedDisputeId = parseInt(disputeId, 10);
       setDebugInfo(`Selecting jurors for dispute ${disputeId}...`);
       
       // Use the signer to send the transaction
-      const tx = await contractWithSigner.selectJurors(disputeId);
+      const tx = await contractWithSigner.selectJurors(parsedDisputeId);
       setDebugInfo('Juror selection transaction sent, waiting for confirmation...');
       
       await tx.wait();
@@ -499,10 +651,12 @@ const JurorStaking = () => {
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
       
+      // Convert dispute ID to a number to avoid BigInt issues
+      const parsedDisputeId = parseInt(disputeId, 10);
       setDebugInfo(`Casting vote for dispute ${disputeId}, forDisputant: ${forDisputant}...`);
       
       // Use the signer to send the transaction
-      const tx = await contractWithSigner.castVote(disputeId, forDisputant);
+      const tx = await contractWithSigner.castVote(parsedDisputeId, forDisputant);
       setDebugInfo('Vote transaction sent, waiting for confirmation...');
       
       await tx.wait();
@@ -521,18 +675,14 @@ const JurorStaking = () => {
   };
 
   // Resolve a dispute
-  const resolveDispute = async () => {
+  const resolveDispute = async (disputeId) => {
     try {
       setIsLoading(true);
       setError(null);
-      setDebugInfo('Resolving dispute...');
+      setDebugInfo(`Resolving dispute ${disputeId}...`);
       
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
-      }
-      
-      if (!disputeId) {
-        throw new Error('Dispute ID is required');
       }
       
       // Get signer from library
@@ -541,18 +691,19 @@ const JurorStaking = () => {
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
       
+      // Convert dispute ID to a number to avoid BigInt issues
+      const parsedDisputeId = parseInt(disputeId, 10);
       setDebugInfo(`Resolving dispute ${disputeId}...`);
       
       // Use the signer to send the transaction
-      const tx = await contractWithSigner.resolveDispute(disputeId);
-      setDebugInfo('Dispute resolution transaction sent, waiting for confirmation...');
+      const tx = await contractWithSigner.resolveDispute(parsedDisputeId);
+      setDebugInfo('Resolve transaction sent, waiting for confirmation...');
       
       await tx.wait();
       
       // Reload data
       await loadContractData();
       
-      setDisputeId('');
       setDebugInfo('Dispute resolved successfully');
     } catch (error) {
       console.error('Error resolving dispute:', error);
@@ -654,19 +805,44 @@ const JurorStaking = () => {
             
             <div className="action-group">
               <h4>Stake Tokens</h4>
+              <p className="help-text">To stake tokens, first enter an amount, then approve the tokens, and finally click "Stake Tokens". You'll need to confirm each transaction in MetaMask.</p>
               <div className="input-group">
                 <input
                   type="text"
                   value={stakeAmount}
-                  onChange={(e) => setStakeAmount(e.target.value)}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    console.log('Stake amount changed:', value);
+                    setStakeAmount(value);
+                    
+                    // Reset approval state when amount changes
+                    if (value && !isNaN(parseFloat(value)) && parseFloat(value) > 0) {
+                      // If there's a valid amount, we'll check approval in loadUserData
+                      setDebugInfo(`Stake amount changed to ${value}. Checking approval status...`);
+                      // We'll let loadUserData handle the approval check
+                    } else {
+                      // If the amount is invalid or empty, reset approval state
+                      setIsApproved(false);
+                      setDebugInfo('Please enter a valid stake amount to check approval status.');
+                    }
+                  }}
                   placeholder="Amount to stake"
                   disabled={isLoading}
                 />
                 <button
-                  onClick={approveTokens}
-                  disabled={isLoading || !stakeAmount || isApproved}
+                  onClick={() => {
+                    console.log('Approve button clicked');
+                    console.log('Current state:', {
+                      isLoading,
+                      stakeAmount,
+                      isValidAmount: !isNaN(parseFloat(stakeAmount)) && parseFloat(stakeAmount) > 0,
+                      isApproved
+                    });
+                    approveTokens();
+                  }}
+                  disabled={isLoading || !stakeAmount || isNaN(parseFloat(stakeAmount)) || parseFloat(stakeAmount) <= 0}
                 >
-                  {isLoading ? 'Approving...' : 'Approve Tokens'}
+                  {isLoading ? 'Approving...' : isApproved ? 'Approved' : 'Approve Tokens'}
                 </button>
                 <button
                   onClick={stakeTokens}
@@ -753,7 +929,7 @@ const JurorStaking = () => {
                   {isLoading ? 'Selecting...' : 'Select Jurors'}
                 </button>
                 <button
-                  onClick={resolveDispute}
+                  onClick={() => resolveDispute(disputeId)}
                   disabled={isLoading || !disputeId}
                 >
                   {isLoading ? 'Resolving...' : 'Resolve Dispute'}
@@ -814,6 +990,9 @@ const JurorStaking = () => {
             <p><strong>Account:</strong> {account || 'None'}</p>
             <p><strong>Contract Initialized:</strong> {contract ? 'Yes' : 'No'}</p>
             <p><strong>Token Contract Initialized:</strong> {tokenContract ? 'Yes' : 'No'}</p>
+            <p><strong>Approval Status:</strong> {isApproved ? 'Approved' : 'Not Approved'}</p>
+            <p><strong>Stake Amount:</strong> {stakeAmount || 'Not set'}</p>
+            <p><strong>Help:</strong> To stake tokens, first enter an amount, then approve the tokens, and finally click "Stake Tokens". If you see "Approved" but haven't approved yet, it means you already have sufficient allowance from a previous approval.</p>
           </div>
         </>
       )}
