@@ -1,5 +1,9 @@
 .App {
   text-align: center;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
 .App-logo {
@@ -15,13 +19,14 @@
 
 .App-header {
   background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
+  padding: 20px;
   color: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.App-header h1 {
+  margin: 0;
+  font-size: 2rem;
 }
 
 .App-link {
@@ -35,4 +40,114 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+.App-main {
+  flex: 1;
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.App-footer {
+  background-color: #f8f9fa;
+  padding: 15px;
+  color: #6c757d;
+  font-size: 0.9rem;
+  border-top: 1px solid #dee2e6;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .App-header h1 {
+    font-size: 1.5rem;
+  }
+  
+  .App-main {
+    padding: 15px;
+  }
+}
+
+/* Wallet Connect Styles */
+.wallet-connect {
+  margin: 20px 0;
+  padding: 15px;
+  border-radius: 8px;
+  background-color: rgba(255, 255, 255, 0.1);
+  max-width: 500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.wallet-connect h1 {
+  font-size: 1.5rem;
+  margin-bottom: 15px;
+}
+
+.wallet-connect button {
+  background-color: #4CAF50;
+  border: none;
+  color: white;
+  padding: 10px 20px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 16px;
+  margin: 10px 0;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+.wallet-connect button:hover {
+  background-color: #45a049;
+}
+
+.wallet-connect button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+.wallet-connect button.connecting {
+  background-color: #ff9800;
+}
+
+.error-message {
+  color: #ff6b6b;
+  margin: 10px 0;
+  padding: 10px;
+  background-color: rgba(255, 107, 107, 0.1);
+  border-radius: 4px;
+}
+
+.connected-account {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.connected-account p {
+  word-break: break-all;
+  max-width: 100%;
+}
+
+/* Troubleshooting Toggle Button */
+.troubleshooting-toggle {
+  background-color: #2196F3;
+  border: none;
+  color: white;
+  padding: 8px 16px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 14px;
+  margin: 10px 0;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+.troubleshooting-toggle:hover {
+  background-color: #0b7dda;
 }

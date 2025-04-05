@@ -5,7 +5,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Counters.sol";
-import { BrowserProvider } from 'ethers';
 
 /**
  * @title JurorStaking
@@ -22,8 +21,9 @@ contract JurorStaking is Ownable, ReentrancyGuard {
     uint256 public totalStaked;
     
     // Juror pools
-    uint256 public constant POOL_SIZE = 5;
-    uint256 public constant MAX_WEIGHT = 2; // Maximum weight for a single juror
+    uint256 public constant POOL_SIZE = 5; // how many should we keep ?
+    uint256 public constant MAX_WEIGHT = 2; // Maximum weight for a single juror 
+    // this value should be dynamic
     
     // Dispute tracking
     Counters.Counter private _disputeIds;
@@ -69,10 +69,7 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         minimumStake = _minimumStake;
     }
     
-    /**
-     * @dev Stake tokens to become a juror
-     * @param _amount Amount of tokens to stake
-     */
+ 
     function stake(uint256 _amount) external nonReentrant {
         require(_amount >= minimumStake, "Stake below minimum");
         require(grullToken.transferFrom(msg.sender, address(this), _amount), "Transfer failed");
@@ -87,10 +84,7 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         emit Staked(msg.sender, _amount);
     }
     
-    /**
-     * @dev Unstake tokens
-     * @param _amount Amount of tokens to unstake
-     */
+  
     function unstake(uint256 _amount) external nonReentrant {
         Stake storage userStake = stakes[msg.sender];
         require(userStake.amount >= _amount, "Insufficient stake");
@@ -107,11 +101,6 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         emit Unstaked(msg.sender, _amount);
     }
     
-    /**
-     * @dev Create a new dispute
-     * @param _defendant Address of the defendant
-     * @param _reward Amount of tokens to be distributed to jurors
-     */
     function createDispute(address _defendant, uint256 _reward) external nonReentrant {
         require(_defendant != msg.sender, "Cannot dispute yourself");
         require(grullToken.transferFrom(msg.sender, address(this), _reward), "Transfer failed");
@@ -129,11 +118,7 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         
         emit DisputeCreated(disputeId, msg.sender, _defendant, _reward);
     }
-    
-    /**
-     * @dev Select jurors for a dispute using weighted random selection
-     * @param _disputeId ID of the dispute
-     */
+   
     function selectJurors(uint256 _disputeId) external {
         Dispute storage dispute = disputes[_disputeId];
         require(!dispute.resolved, "Dispute already resolved");
@@ -142,10 +127,13 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         // This is a simplified version. In a real implementation, you would use a more
         // sophisticated random selection mechanism, possibly with Chainlink VRF
         address[] memory potentialJurors = getActiveJurors();
-        require(potentialJurors.length >= POOL_SIZE, "Not enough jurors");
+        
+        // If there are fewer jurors than POOL_SIZE, use all available jurors
+        uint256 numJurorsToSelect = potentialJurors.length < POOL_SIZE ? potentialJurors.length : POOL_SIZE;
+        require(numJurorsToSelect > 0, "Not enough jurors");
         
         // Simple random selection (not secure, just for demonstration)
-        for (uint256 i = 0; i < POOL_SIZE; i++) {
+        for (uint256 i = 0; i < numJurorsToSelect; i++) {
             uint256 randomIndex = uint256(keccak256(abi.encodePacked(block.timestamp, i))) % potentialJurors.length;
             address selectedJuror = potentialJurors[randomIndex];
             
@@ -157,11 +145,7 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         }
     }
     
-    /**
-     * @dev Cast a vote in a dispute
-     * @param _disputeId ID of the dispute
-     * @param _forDisputant True if voting for disputant, false if voting for defendant
-     */
+    
     function castVote(uint256 _disputeId, bool _forDisputant) external {
         Dispute storage dispute = disputes[_disputeId];
         require(!dispute.resolved, "Dispute already resolved");
@@ -183,11 +167,7 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         
         emit VoteCast(_disputeId, msg.sender, _forDisputant);
     }
-    
-    /**
-     * @dev Resolve a dispute and distribute rewards/penalties
-     * @param _disputeId ID of the dispute
-     */
+ 
     function resolveDispute(uint256 _disputeId) external {
         Dispute storage dispute = disputes[_disputeId];
         require(!dispute.resolved, "Dispute already resolved");
@@ -202,9 +182,7 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         emit DisputeResolved(_disputeId, disputantWon);
     }
     
-    /**
-     * @dev Claim rewards from resolved disputes
-     */
+   
     function claimRewards() external nonReentrant {
         uint256 reward = jurorRewards[msg.sender];
         require(reward > 0, "No rewards to claim");
@@ -215,11 +193,7 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         emit RewardClaimed(msg.sender, reward);
     }
     
-    /**
-     * @dev Calculate the weight of a juror based on their stake
-     * @param _stakeAmount Amount of tokens staked
-     * @return Weight of the juror (1-2)
-     */
+  
     function calculateWeight(uint256 _stakeAmount) public view returns (uint256) {
         if (_stakeAmount < minimumStake * 2) {
             return 1;
@@ -231,27 +205,20 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         }
     }
     
-    /**
-     * @dev Get all active jurors
-     * @return Array of active juror addresses
-     */
+    
     function getActiveJurors() public view returns (address[] memory) {
-        // This is a simplified version. In a real implementation, you would
-        // maintain a list of active jurors or use a more efficient data structure
-        address[] memory activeJurors = new address[](100); // Arbitrary size
-        uint256 count = 0;
+        // This is a simplified implementation
+        // In a real implementation, you would iterate through all stakers and return those with active stakes
         
-        // This is just a placeholder. In a real implementation, you would
-        // iterate through all stakers and collect active ones
+        // For now, we'll return a dummy array with the contract owner as the only active juror
+        // This is just for testing purposes
+        address[] memory activeJurors = new address[](1);
+        activeJurors[0] = owner();
+        
         return activeJurors;
     }
     
-    /**
-     * @dev Check if an address is a juror for a specific dispute
-     * @param _disputeId ID of the dispute
-     * @param _juror Address to check
-     * @return True if the address is a juror for the dispute
-     */
+  
     function isJuror(uint256 _disputeId, address _juror) public view returns (bool) {
         Dispute storage dispute = disputes[_disputeId];
         for (uint256 i = 0; i < dispute.jurors.length; i++) {
@@ -260,6 +227,13 @@ contract JurorStaking is Ownable, ReentrancyGuard {
             }
         }
         return false;
+    }
+    
+    /**
+     * @dev Returns the current dispute count
+     */
+    function getDisputeCount() public view returns (uint256) {
+        return _disputeIds.current();
     }
     
     /**

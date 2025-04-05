@@ -1,476 +1,819 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useWeb3React } from '@web3-react/core';
 import { ethers } from 'ethers';
-import { InjectedConnector } from '@web3-react/injected-connector';
 import { JUROR_STAKING_ADDRESS, TOKEN_ADDRESS } from '../config';
+import JurorStakingABI from '../contracts/JurorStaking.json';
+import TokenABI from '../contracts/GRULLToken.json';
 import './JurorStaking.css';
 
-// ABI for the JurorStaking contract
-const JUROR_STAKING_ABI = [
-  "function stake(uint256 _amount) external",
-  "function unstake(uint256 _amount) external",
-  "function createDispute(address _defendant, uint256 _reward) external",
-  "function selectJurors(uint256 _disputeId) external",
-  "function castVote(uint256 _disputeId, bool _forDisputant) external",
-  "function resolveDispute(uint256 _disputeId) external",
-  "function claimRewards() external",
-  "function stakes(address) view returns (uint256 amount, uint256 lastActive, bool isActive)",
-  "function disputes(uint256) view returns (uint256 id, address disputant, address defendant, uint256 reward, uint256 deadline, bool resolved)",
-  "function jurorRewards(address) view returns (uint256)",
-  "function minimumStake() view returns (uint256)",
-  "function totalStaked() view returns (uint256)",
-  "function isJuror(uint256, address) view returns (bool)",
-  "event Staked(address indexed user, uint256 amount)",
-  "event Unstaked(address indexed user, uint256 amount)",
-  "event DisputeCreated(uint256 indexed disputeId, address disputant, address defendant, uint256 reward)",
-  "event DisputeResolved(uint256 indexed disputeId, bool disputantWon)",
-  "event JurorSelected(uint256 indexed disputeId, address juror, uint256 weight)",
-  "event VoteCast(uint256 indexed disputeId, address juror, bool forDisputant)",
-  "event RewardClaimed(address juror, uint256 amount)"
-];
-
-// ABI for the GRULL token
-const TOKEN_ABI = [
-  "function approve(address spender, uint256 amount) external returns (bool)",
-  "function allowance(address owner, address spender) view returns (uint256)",
-  "function balanceOf(address account) view returns (uint256)"
-];
-
-const injected = new InjectedConnector({
-  supportedChainIds: [1, 3, 4, 5, 42, 1337], 
-});
-
 const JurorStaking = () => {
-  const { active, account, library, activate, deactivate } = useWeb3React();
-  const [jurorStakingContract, setJurorStakingContract] = useState(null);
+  const { active, account, library } = useWeb3React();
+  const [contract, setContract] = useState(null);
   const [tokenContract, setTokenContract] = useState(null);
+  const [userStake, setUserStake] = useState('0');
+  const [userBalance, setUserBalance] = useState('0');
+  const [totalStaked, setTotalStaked] = useState('0');
+  const [minimumStake, setMinimumStake] = useState('0');
   const [stakeAmount, setStakeAmount] = useState('');
   const [unstakeAmount, setUnstakeAmount] = useState('');
-  const [defendantAddress, setDefendantAddress] = useState('');
-  const [disputeReward, setDisputeReward] = useState('');
-  const [disputeId, setDisputeId] = useState('');
-  const [voteForDisputant, setVoteForDisputant] = useState(true);
-  const [userStake, setUserStake] = useState({ amount: '0', isActive: false });
-  const [userRewards, setUserRewards] = useState('0');
-  const [minimumStake, setMinimumStake] = useState('0');
-  const [totalStaked, setTotalStaked] = useState('0');
   const [disputes, setDisputes] = useState([]);
-  const [isJurorForDispute, setIsJurorForDispute] = useState(false);
-  const [tokenBalance, setTokenBalance] = useState('0');
-  const [tokenAllowance, setTokenAllowance] = useState('0');
+  const [defendantAddress, setDefendantAddress] = useState('');
+  const [reward, setReward] = useState('');
+  const [disputeId, setDisputeId] = useState('');
+  const [jurorRewards, setJurorRewards] = useState('0');
+  const [isApproved, setIsApproved] = useState(false);
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [debugInfo, setDebugInfo] = useState('');
 
+  // Initialize contracts
   useEffect(() => {
     if (active && library) {
-      // Initialize contracts with the provider
-      const jurorStaking = new ethers.Contract(
-        JUROR_STAKING_ADDRESS,
-        JUROR_STAKING_ABI,
-        library
-      );
-      setJurorStakingContract(jurorStaking);
+      try {
+        setDebugInfo('Initializing contracts...');
+        const provider = library;
+        
+        // Create contract instances with provider
+        const jurorStakingContract = new ethers.Contract(
+          JUROR_STAKING_ADDRESS,
+          JurorStakingABI.abi,
+          provider
+        );
+        
+        const tokenContractInstance = new ethers.Contract(
+          TOKEN_ADDRESS,
+          TokenABI.abi,
+          provider
+        );
+        
+        setContract(jurorStakingContract);
+        setTokenContract(tokenContractInstance);
+        setDebugInfo('Contracts initialized successfully');
 
-      const token = new ethers.Contract(
-        TOKEN_ADDRESS,
-        TOKEN_ABI,
-        library
-      );
-      setTokenContract(token);
+        // Add event listener for DisputeCreated
+        jurorStakingContract.on('DisputeCreated', (disputeId, disputant, defendant, reward, event) => {
+          console.log('Dispute Created:', { disputeId, disputant, defendant, reward });
+          
+          // Handle both ethers v5 and v6 event formats
+          let parsedDisputeId, parsedDisputant, parsedDefendant, parsedReward;
+          
+          if (typeof disputeId === 'object' && disputeId.args) {
+            // ethers v5 format with event object
+            parsedDisputeId = disputeId.args.disputeId;
+            parsedDisputant = disputeId.args.disputant;
+            parsedDefendant = disputeId.args.defendant;
+            parsedReward = disputeId.args.reward;
+          } else {
+            // ethers v6 format or v5 with separate arguments
+            parsedDisputeId = disputeId;
+            parsedDisputant = disputant;
+            parsedDefendant = defendant;
+            parsedReward = reward;
+          }
+          
+          setDisputes((prevDisputes) => {
+            // Check if dispute already exists
+            const exists = prevDisputes.some(d => d.id === parsedDisputeId);
+            if (exists) return prevDisputes;
+            
+            // Set the dispute ID state variable
+            setDisputeId(parsedDisputeId.toString());
+            
+            return [
+              ...prevDisputes,
+              {
+                id: parsedDisputeId,
+                disputant: parsedDisputant, 
+                defendant: parsedDefendant,
+                reward: ethers.formatEther(parsedReward),
+                deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleString(),
+                resolved: false,
+                disputantVotes: '0',
+                defendantVotes: '0',
+                jurors: []
+              }
+            ];
+          });
+        });
 
-      loadUserData(jurorStaking, token);
-      loadContractData(jurorStaking);
+        // Clean up the event listener on component unmount
+        return () => {
+          jurorStakingContract.removeAllListeners('DisputeCreated');
+        };
+      } catch (error) {
+        console.error('Error initializing contracts:', error);
+        setError(`Error initializing contracts: ${error.message}`);
+        setDebugInfo(`Error initializing contracts: ${error.message}`);
+      }
     }
-  }, [active, library, account]);
+  }, [active, library]);
 
-  const loadUserData = async (jurorStaking, token) => {
-    if (!account) return;
-
+  // Load user-specific data
+  const loadUserData = useCallback(async () => {
     try {
-      // Get user stake
-      const stake = await jurorStaking.stakes(account);
-      setUserStake({
-        amount: ethers.formatEther(stake.amount),
-        isActive: stake.isActive
-      });
-
-      // Get user rewards
-      const rewards = await jurorStaking.jurorRewards(account);
-      setUserRewards(ethers.formatEther(rewards));
-
-      // Get token balance
-      const balance = await token.balanceOf(account);
-      setTokenBalance(ethers.formatEther(balance));
-
-      // Get token allowance
-      const allowance = await token.allowance(account, JUROR_STAKING_ADDRESS);
-      setTokenAllowance(ethers.formatEther(allowance));
-
-      // Get minimum stake
-      const minStake = await jurorStaking.minimumStake();
-      setMinimumStake(ethers.formatEther(minStake));
-
-      // Get total staked
-      const total = await jurorStaking.totalStaked();
-      setTotalStaked(ethers.formatEther(total));
+      setDebugInfo('Loading user data...');
+      if (!contract || !account || !tokenContract) {
+        setDebugInfo('Cannot load user data: contract, account, or tokenContract is missing');
+        return;
+      }
+      
+      setDebugInfo('Getting user stake...');
+      // Get user's stake
+      const stake = await contract.stakes(account);
+      setUserStake(ethers.formatEther(stake.amount));
+      
+      setDebugInfo('Getting user token balance...');
+      // Get user's token balance
+      const balance = await tokenContract.balanceOf(account);
+      setUserBalance(ethers.formatEther(balance));
+      
+      setDebugInfo('Getting user rewards...');
+      // Get user's rewards
+      const rewards = await contract.jurorRewards(account);
+      setJurorRewards(ethers.formatEther(rewards));
+      
+      setDebugInfo('Checking token approval...');
+      // Check if tokens are approved for staking
+      const allowance = await tokenContract.allowance(account, JUROR_STAKING_ADDRESS);
+      setIsApproved(allowance > 0);
+      
+      setDebugInfo('User data loaded successfully');
     } catch (error) {
       console.error('Error loading user data:', error);
+      setError(`Error loading user data: ${error.message}`);
+      setDebugInfo(`Error loading user data: ${error.message}`);
     }
-  };
+  }, [contract, account, tokenContract]);
 
-  const loadContractData = async (jurorStaking) => {
+  // Load contract-wide data
+  const loadContractData = useCallback(async () => {
     try {
-      // Load disputes (this is a simplified version)
-      // In a real implementation, you would need to track dispute IDs
-      const disputeCount = 5; // Example: load first 5 disputes
-      const loadedDisputes = [];
+      setDebugInfo('Loading contract data...');
+      if (!contract) {
+        setDebugInfo('Cannot load contract data: contract is missing');
+        return;
+      }
       
+      setDebugInfo('Getting total staked amount...');
+      // Get total staked amount
+      const total = await contract.totalStaked();
+      setTotalStaked(ethers.formatEther(total));
+      
+      setDebugInfo('Getting minimum stake requirement...');
+      // Get minimum stake requirement
+      const min = await contract.minimumStake();
+      setMinimumStake(ethers.formatEther(min));
+      
+      setDebugInfo('Getting dispute count...');
+      // Get dispute count
+      let disputeCount;
+      try {
+        disputeCount = await contract.getDisputeCount();
+      } catch (error) {
+        console.error('Error getting dispute count:', error);
+        setDebugInfo('Error getting dispute count, using 0 as fallback');
+        disputeCount = 0;
+      }
+      
+      // Load disputes
+      const loadedDisputes = [];
       for (let i = 0; i < disputeCount; i++) {
         try {
-          const dispute = await jurorStaking.disputes(i);
-          if (dispute && dispute.id !== undefined) {
-            loadedDisputes.push({
-              id: dispute.id.toString(),
-              disputant: dispute.disputant,
-              defendant: dispute.defendant,
-              reward: ethers.formatEther(dispute.reward),
-              deadline: new Date(dispute.deadline * 1000).toLocaleString(),
-              resolved: dispute.resolved
-            });
-          }
+          const dispute = await contract.disputes(i);
+          loadedDisputes.push({
+            id: dispute.id,
+            disputant: dispute.disputant,
+            defendant: dispute.defendant,
+            reward: ethers.formatEther(dispute.reward),
+            deadline: new Date(dispute.deadline * 1000).toLocaleString(),
+            resolved: dispute.resolved,
+            disputantVotes: dispute.disputantVotes.toString(),
+            defendantVotes: dispute.defendantVotes.toString(),
+            jurors: dispute.jurors
+          });
         } catch (error) {
-          // Dispute might not exist, continue to next
-          console.log(`Dispute ${i} not found`);
+          console.error(`Error loading dispute ${i}:`, error);
+          setDebugInfo(`Error loading dispute ${i}, skipping`);
         }
       }
       
       setDisputes(loadedDisputes);
+      setDebugInfo('Contract data loaded successfully');
     } catch (error) {
       console.error('Error loading contract data:', error);
+      setError(`Error loading contract data: ${error.message}`);
+      setDebugInfo(`Error loading contract data: ${error.message}`);
     }
-  };
+  }, [contract]);
 
-  const connectWallet = async () => {
-    try {
-      await activate(injected);
-    } catch (error) {
-      console.error('Error connecting wallet:', error);
+  // Load data when contracts are initialized
+  useEffect(() => {
+    if (contract && tokenContract) {
+      loadContractData();
     }
-  };
+  }, [contract, tokenContract, loadContractData]);
 
-  const disconnectWallet = async () => {
-    try {
-      deactivate();
-    } catch (error) {
-      console.error('Error disconnecting wallet:', error);
+  // Load user data when account changes
+  useEffect(() => {
+    if (contract && tokenContract && account) {
+      loadUserData();
     }
-  };
+  }, [contract, tokenContract, account, loadUserData]);
 
-  const approveToken = async () => {
-    if (!tokenContract || !stakeAmount) return;
-
+  // Approve tokens for staking
+  const approveTokens = async () => {
     try {
-      const amount = ethers.parseEther(stakeAmount);
-      // Get the signer from the library
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo('Approving tokens...');
+      
+      if (!tokenContract || !account || !library) {
+        throw new Error('Token contract, account, or library not available');
+      }
+      
+      // Get signer from library
       const signer = await library.getSigner();
-      // Connect the contract to the signer
-      const tokenWithSigner = tokenContract.connect(signer);
-      const tx = await tokenWithSigner.approve(JUROR_STAKING_ADDRESS, amount);
+      
+      // Create a new contract instance with the signer
+      const tokenContractWithSigner = tokenContract.connect(signer);
+      
+      const amount = ethers.parseEther(stakeAmount);
+      setDebugInfo(`Approving ${stakeAmount} tokens for staking contract...`);
+      
+      // Use the signer to send the transaction
+      const tx = await tokenContractWithSigner.approve(JUROR_STAKING_ADDRESS, amount);
+      setDebugInfo('Approval transaction sent, waiting for confirmation...');
+      
       await tx.wait();
-      alert('Token approval successful!');
-      loadUserData(jurorStakingContract, tokenContract);
+      
+      setIsApproved(true);
+      setDebugInfo('Tokens approved successfully');
     } catch (error) {
       console.error('Error approving tokens:', error);
-      alert('Error approving tokens: ' + error.message);
+      setError(`Error approving tokens: ${error.message}`);
+      setDebugInfo(`Error approving tokens: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
+  // Stake tokens
   const stakeTokens = async () => {
-    if (!jurorStakingContract || !stakeAmount) return;
-
     try {
-      const amount = ethers.parseEther(stakeAmount);
-      // Get the signer from the library
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo('Staking tokens...');
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      // Get signer from library
       const signer = await library.getSigner();
-      // Connect the contract to the signer
-      const jurorStakingWithSigner = jurorStakingContract.connect(signer);
-      const tx = await jurorStakingWithSigner.stake(amount);
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      const amount = ethers.parseEther(stakeAmount);
+      setDebugInfo(`Staking ${stakeAmount} tokens...`);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.stake(amount);
+      setDebugInfo('Staking transaction sent, waiting for confirmation...');
+      
       await tx.wait();
-      alert('Staking successful!');
+      
+      // Reload data
+      await loadUserData();
+      await loadContractData();
+      
       setStakeAmount('');
-      loadUserData(jurorStakingContract, tokenContract);
+      setDebugInfo('Tokens staked successfully');
     } catch (error) {
       console.error('Error staking tokens:', error);
-      alert('Error staking tokens: ' + error.message);
+      setError(`Error staking tokens: ${error.message}`);
+      setDebugInfo(`Error staking tokens: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
+  // Unstake tokens
   const unstakeTokens = async () => {
-    if (!jurorStakingContract || !unstakeAmount) return;
-
     try {
-      const amount = ethers.parseEther(unstakeAmount);
-      // Get the signer from the library
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo('Unstaking tokens...');
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      // Get signer from library
       const signer = await library.getSigner();
-      // Connect the contract to the signer
-      const jurorStakingWithSigner = jurorStakingContract.connect(signer);
-      const tx = await jurorStakingWithSigner.unstake(amount);
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      const amount = ethers.parseEther(unstakeAmount);
+      setDebugInfo(`Unstaking ${unstakeAmount} tokens...`);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.unstake(amount);
+      setDebugInfo('Unstaking transaction sent, waiting for confirmation...');
+      
       await tx.wait();
-      alert('Unstaking successful!');
+      
+      // Reload data
+      await loadUserData();
+      await loadContractData();
+      
       setUnstakeAmount('');
-      loadUserData(jurorStakingContract, tokenContract);
+      setDebugInfo('Tokens unstaked successfully');
     } catch (error) {
       console.error('Error unstaking tokens:', error);
-      alert('Error unstaking tokens: ' + error.message);
+      setError(`Error unstaking tokens: ${error.message}`);
+      setDebugInfo(`Error unstaking tokens: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
+  // Create a dispute
   const createDispute = async () => {
-    if (!jurorStakingContract || !defendantAddress || !disputeReward) return;
-
     try {
-      const reward = ethers.parseEther(disputeReward);
-      // Get the signer from the library
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo('Creating dispute...');
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      if (!defendantAddress || !reward) {
+        throw new Error('Defendant address and reward are required');
+      }
+      
+      // Get signer from library
       const signer = await library.getSigner();
-      // Connect the contract to the signer
-      const jurorStakingWithSigner = jurorStakingContract.connect(signer);
-      const tx = await jurorStakingWithSigner.createDispute(defendantAddress, reward);
-      await tx.wait();
-      alert('Dispute created successfully!');
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      const rewardAmount = ethers.parseEther(reward);
+      setDebugInfo(`Creating dispute with defendant ${defendantAddress} and reward ${reward}...`);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.createDispute(defendantAddress, rewardAmount);
+      setDebugInfo('Dispute creation transaction sent, waiting for confirmation...');
+      
+      // Wait for the transaction to be mined
+      const receipt = await tx.wait();
+      setDebugInfo('Transaction confirmed, processing receipt...');
+      
+      // Get the dispute ID from the event - handle different ethers.js versions
+      let disputeId;
+      
+      // Check if we're using ethers v6 (which has a different event structure)
+      if (receipt.logs) {
+        // ethers v6 format
+        setDebugInfo('Using ethers v6 format for events');
+        const disputeCreatedLog = receipt.logs.find(log => {
+          try {
+            const parsedLog = contract.interface.parseLog(log);
+            return parsedLog && parsedLog.name === 'DisputeCreated';
+          } catch (e) {
+            return false;
+          }
+        });
+        
+        if (disputeCreatedLog) {
+          const parsedLog = contract.interface.parseLog(disputeCreatedLog);
+          disputeId = parsedLog.args.disputeId;
+        }
+      } else if (receipt.events) {
+        // ethers v5 format
+        setDebugInfo('Using ethers v5 format for events');
+        const disputeCreatedEvent = receipt.events.find(event => event.event === 'DisputeCreated');
+        if (disputeCreatedEvent) {
+          disputeId = disputeCreatedEvent.args.disputeId;
+        }
+      }
+      
+      if (disputeId !== undefined) {
+        setDebugInfo(`Dispute created with ID: ${disputeId}`);
+        
+        // Set the dispute ID state variable
+        setDisputeId(disputeId.toString());
+        
+        // Add the new dispute to the state
+        setDisputes(prevDisputes => [
+          ...prevDisputes,
+          {
+            id: disputeId,
+            disputant: account,
+            defendant: defendantAddress,
+            reward: reward,
+            deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleString(),
+            resolved: false,
+            disputantVotes: '0',
+            defendantVotes: '0',
+            jurors: []
+          }
+        ]);
+      } else {
+        setDebugInfo('Could not extract dispute ID from transaction receipt');
+        // Fallback: reload all disputes
+        await loadContractData();
+      }
+      
       setDefendantAddress('');
-      setDisputeReward('');
-      loadContractData(jurorStakingContract);
+      setReward('');
+      setDebugInfo('Dispute created successfully');
     } catch (error) {
       console.error('Error creating dispute:', error);
-      alert('Error creating dispute: ' + error.message);
+      setError(`Error creating dispute: ${error.message}`);
+      setDebugInfo(`Error creating dispute: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const selectJurorsForDispute = async () => {
-    if (!jurorStakingContract || !disputeId) return;
-
+  // Select jurors for a dispute
+  const selectJurors = async () => {
     try {
-      // Get the signer from the library
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo('Selecting jurors...');
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      if (!disputeId) {
+        throw new Error('Dispute ID is required');
+      }
+      
+      // Get signer from library
       const signer = await library.getSigner();
-      // Connect the contract to the signer
-      const jurorStakingWithSigner = jurorStakingContract.connect(signer);
-      const tx = await jurorStakingWithSigner.selectJurors(disputeId);
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      setDebugInfo(`Selecting jurors for dispute ${disputeId}...`);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.selectJurors(disputeId);
+      setDebugInfo('Juror selection transaction sent, waiting for confirmation...');
+      
       await tx.wait();
-      alert('Jurors selected successfully!');
+      
+      // Reload data
+      await loadContractData();
+      
       setDisputeId('');
-      loadContractData(jurorStakingContract);
+      setDebugInfo('Jurors selected successfully');
     } catch (error) {
       console.error('Error selecting jurors:', error);
-      alert('Error selecting jurors: ' + error.message);
+      setError(`Error selecting jurors: ${error.message}`);
+      setDebugInfo(`Error selecting jurors: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const castVoteForDispute = async () => {
-    if (!jurorStakingContract || !disputeId) return;
-
+  // Cast a vote
+  const castVote = async (disputeId, forDisputant) => {
     try {
-      // Get the signer from the library
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo(`Casting vote for dispute ${disputeId}...`);
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      // Get signer from library
       const signer = await library.getSigner();
-      // Connect the contract to the signer
-      const jurorStakingWithSigner = jurorStakingContract.connect(signer);
-      const tx = await jurorStakingWithSigner.castVote(disputeId, voteForDisputant);
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      setDebugInfo(`Casting vote for dispute ${disputeId}, forDisputant: ${forDisputant}...`);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.castVote(disputeId, forDisputant);
+      setDebugInfo('Vote transaction sent, waiting for confirmation...');
+      
       await tx.wait();
-      alert('Vote cast successfully!');
-      setDisputeId('');
-      setVoteForDisputant(true);
-      loadContractData(jurorStakingContract);
+      
+      // Reload data
+      await loadContractData();
+      
+      setDebugInfo('Vote cast successfully');
     } catch (error) {
       console.error('Error casting vote:', error);
-      alert('Error casting vote: ' + error.message);
+      setError(`Error casting vote: ${error.message}`);
+      setDebugInfo(`Error casting vote: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const resolveDisputeById = async () => {
-    if (!jurorStakingContract || !disputeId) return;
-
+  // Resolve a dispute
+  const resolveDispute = async () => {
     try {
-      // Get the signer from the library
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo('Resolving dispute...');
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      if (!disputeId) {
+        throw new Error('Dispute ID is required');
+      }
+      
+      // Get signer from library
       const signer = await library.getSigner();
-      // Connect the contract to the signer
-      const jurorStakingWithSigner = jurorStakingContract.connect(signer);
-      const tx = await jurorStakingWithSigner.resolveDispute(disputeId);
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      setDebugInfo(`Resolving dispute ${disputeId}...`);
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.resolveDispute(disputeId);
+      setDebugInfo('Dispute resolution transaction sent, waiting for confirmation...');
+      
       await tx.wait();
-      alert('Dispute resolved successfully!');
+      
+      // Reload data
+      await loadContractData();
+      
       setDisputeId('');
-      loadContractData(jurorStakingContract);
+      setDebugInfo('Dispute resolved successfully');
     } catch (error) {
       console.error('Error resolving dispute:', error);
-      alert('Error resolving dispute: ' + error.message);
+      setError(`Error resolving dispute: ${error.message}`);
+      setDebugInfo(`Error resolving dispute: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const claimJurorRewards = async () => {
-    if (!jurorStakingContract) return;
-
+  // Claim rewards
+  const claimRewards = async () => {
     try {
-      // Get the signer from the library
+      setIsLoading(true);
+      setError(null);
+      setDebugInfo('Claiming rewards...');
+      
+      if (!contract || !account || !library) {
+        throw new Error('Contract, account, or library not available');
+      }
+      
+      // Get signer from library
       const signer = await library.getSigner();
-      // Connect the contract to the signer
-      const jurorStakingWithSigner = jurorStakingContract.connect(signer);
-      const tx = await jurorStakingWithSigner.claimRewards();
+      
+      // Create a new contract instance with the signer
+      const contractWithSigner = contract.connect(signer);
+      
+      setDebugInfo('Claiming rewards...');
+      
+      // Use the signer to send the transaction
+      const tx = await contractWithSigner.claimRewards();
+      setDebugInfo('Reward claim transaction sent, waiting for confirmation...');
+      
       await tx.wait();
-      alert('Rewards claimed successfully!');
-      loadUserData(jurorStakingContract, tokenContract);
+      
+      // Reload data
+      await loadUserData();
+      
+      setDebugInfo('Rewards claimed successfully');
     } catch (error) {
       console.error('Error claiming rewards:', error);
-      alert('Error claiming rewards: ' + error.message);
+      setError(`Error claiming rewards: ${error.message}`);
+      setDebugInfo(`Error claiming rewards: ${error.message}`);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const checkIfJuror = async () => {
-    if (!jurorStakingContract || !disputeId || !account) return;
-
+  // Check if user is a juror for a dispute
+  const isJuror = async (disputeId) => {
     try {
-      const isJuror = await jurorStakingContract.isJuror(disputeId, account);
-      setIsJurorForDispute(isJuror);
+      if (!contract || !account) {
+        return false;
+      }
+      
+      return await contract.isJuror(disputeId, account);
     } catch (error) {
-      console.error('Error checking if juror:', error);
+      console.error('Error checking if user is a juror:', error);
+      return false;
     }
   };
 
-  useEffect(() => {
-    if (disputeId && account) {
-      checkIfJuror();
+  // Calculate weight based on stake
+  const calculateWeight = async (stakeAmount) => {
+    try {
+      if (!contract) {
+        return 1;
+      }
+      
+      return await contract.calculateWeight(ethers.parseEther(stakeAmount));
+    } catch (error) {
+      console.error('Error calculating weight:', error);
+      return 1;
     }
-  }, [disputeId, account]);
+  };
 
   return (
     <div className="juror-staking">
-      <div className="wallet-section">
-        <h2>Wallet Connection</h2>
-        {active ? (
-          <div>
-            <p>Connected Account: {account}</p>
-            <button onClick={disconnectWallet}>Disconnect Wallet</button>
-          </div>
-        ) : (
-          <button onClick={connectWallet}>Connect Wallet</button>
-        )}
-      </div>
-
-      {active && (
+      <h2>GRULL Juror Staking</h2>
+      
+      {error && <div className="error-message">{error}</div>}
+      
+      {!active ? (
+        <div className="connection-prompt">
+          <p>Please connect your wallet to interact with the GRULL Juror Staking system.</p>
+        </div>
+      ) : (
         <>
-          <div className="staking-section">
-            <h2>Stake Tokens</h2>
-            <div>
-              <label>
-                Amount to Stake:
+          <div className="user-info">
+            <h3>Your Information</h3>
+            <p><strong>Account:</strong> {account}</p>
+            <p><strong>Token Balance:</strong> {userBalance} GRULL</p>
+            <p><strong>Staked Amount:</strong> {userStake} GRULL</p>
+            <p><strong>Available Rewards:</strong> {jurorRewards} GRULL</p>
+          </div>
+          
+          <div className="staking-actions">
+            <h3>Staking Actions</h3>
+            
+            <div className="action-group">
+              <h4>Stake Tokens</h4>
+              <div className="input-group">
                 <input
                   type="text"
                   value={stakeAmount}
                   onChange={(e) => setStakeAmount(e.target.value)}
-                  placeholder="Enter amount"
+                  placeholder="Amount to stake"
+                  disabled={isLoading}
                 />
-              </label>
+                <button
+                  onClick={approveTokens}
+                  disabled={isLoading || !stakeAmount || isApproved}
+                >
+                  {isLoading ? 'Approving...' : 'Approve Tokens'}
+                </button>
+                <button
+                  onClick={stakeTokens}
+                  disabled={isLoading || !stakeAmount || !isApproved}
+                >
+                  {isLoading ? 'Staking...' : 'Stake Tokens'}
+                </button>
+              </div>
             </div>
-            <button onClick={approveToken}>Approve Tokens</button>
-            <button onClick={stakeTokens}>Stake Tokens</button>
-            <p>Your current stake: {userStake.amount} GRULL</p>
-            <p>Token balance: {tokenBalance} GRULL</p>
-            <p>Token allowance: {tokenAllowance} GRULL</p>
-          </div>
-
-          <div className="unstaking-section">
-            <h2>Unstake Tokens</h2>
-            <div>
-              <label>
-                Amount to Unstake:
+            
+            <div className="action-group">
+              <h4>Unstake Tokens</h4>
+              <div className="input-group">
                 <input
                   type="text"
                   value={unstakeAmount}
                   onChange={(e) => setUnstakeAmount(e.target.value)}
-                  placeholder="Enter amount"
+                  placeholder="Amount to unstake"
+                  disabled={isLoading}
                 />
-              </label>
+                <button
+                  onClick={unstakeTokens}
+                  disabled={isLoading || !unstakeAmount || parseFloat(unstakeAmount) > parseFloat(userStake)}
+                >
+                  {isLoading ? 'Unstaking...' : 'Unstake Tokens'}
+                </button>
+              </div>
             </div>
-            <button onClick={unstakeTokens}>Unstake Tokens</button>
+            
+            <div className="action-group">
+              <h4>Claim Rewards</h4>
+              <button
+                onClick={claimRewards}
+                disabled={isLoading || parseFloat(jurorRewards) <= 0}
+              >
+                {isLoading ? 'Claiming...' : 'Claim Rewards'}
+              </button>
+            </div>
           </div>
-
-          <div className="dispute-section">
-            <h2>Create Dispute</h2>
-            <div>
-              <label>
-                Defendant Address:
+          
+          <div className="disputes">
+            <h3>Disputes</h3>
+            
+            <div className="action-group">
+              <h4>Create Dispute</h4>
+              <div className="input-group">
                 <input
                   type="text"
                   value={defendantAddress}
                   onChange={(e) => setDefendantAddress(e.target.value)}
-                  placeholder="Enter address"
+                  placeholder="Defendant Address"
+                  disabled={isLoading}
                 />
-              </label>
-            </div>
-            <div>
-              <label>
-                Reward Amount:
                 <input
                   type="text"
-                  value={disputeReward}
-                  onChange={(e) => setDisputeReward(e.target.value)}
-                  placeholder="Enter amount"
+                  value={reward}
+                  onChange={(e) => setReward(e.target.value)}
+                  placeholder="Reward Amount"
+                  disabled={isLoading}
                 />
-              </label>
+                <button
+                  onClick={createDispute}
+                  disabled={isLoading || !defendantAddress || !reward}
+                >
+                  {isLoading ? 'Creating...' : 'Create Dispute'}
+                </button>
+              </div>
             </div>
-            <button onClick={createDispute}>Create Dispute</button>
-          </div>
-
-          <div className="disputes-section">
-            <h2>Disputes</h2>
-            <div>
-              <label>
-                Dispute ID:
+            
+            <div className="action-group">
+              <h4>Manage Dispute</h4>
+              <div className="input-group">
                 <input
                   type="text"
                   value={disputeId}
                   onChange={(e) => setDisputeId(e.target.value)}
-                  placeholder="Enter dispute ID"
+                  placeholder="Dispute ID"
+                  disabled={isLoading}
                 />
-              </label>
-            </div>
-            {isJurorForDispute && (
-              <div>
-                <button onClick={selectJurorsForDispute}>Select Jurors</button>
-                <div>
-                  <label>
-                    Vote for Disputant:
-                    <input
-                      type="checkbox"
-                      checked={voteForDisputant}
-                      onChange={(e) => setVoteForDisputant(e.target.checked)}
-                    />
-                  </label>
-                </div>
-                <button onClick={castVoteForDispute}>Cast Vote</button>
-                <button onClick={resolveDisputeById}>Resolve Dispute</button>
+                <button
+                  onClick={selectJurors}
+                  disabled={isLoading || !disputeId}
+                >
+                  {isLoading ? 'Selecting...' : 'Select Jurors'}
+                </button>
+                <button
+                  onClick={resolveDispute}
+                  disabled={isLoading || !disputeId}
+                >
+                  {isLoading ? 'Resolving...' : 'Resolve Dispute'}
+                </button>
               </div>
-            )}
-            <div className="disputes-list">
-              <h3>Recent Disputes</h3>
-              {disputes.map((dispute) => (
-                <div key={dispute.id} className="dispute-item">
-                  <p>ID: {dispute.id}</p>
-                  <p>Disputant: {dispute.disputant}</p>
-                  <p>Defendant: {dispute.defendant}</p>
-                  <p>Reward: {dispute.reward} GRULL</p>
-                  <p>Deadline: {dispute.deadline}</p>
-                  <p>Resolved: {dispute.resolved ? 'Yes' : 'No'}</p>
-                </div>
-              ))}
             </div>
-          </div>
-
-          <div className="rewards-section">
-            <h2>Claim Rewards</h2>
-            <p>Your rewards: {userRewards} GRULL</p>
-            <button onClick={claimJurorRewards}>Claim Rewards</button>
+            
+            <div className="disputes-list">
+              <h4>Active Disputes</h4>
+              {disputes.length === 0 ? (
+                <p>No active disputes</p>
+              ) : (
+                <div className="disputes-grid">
+                  {disputes.map((dispute) => (
+                    <div key={dispute.id} className="dispute-item">
+                      <h5>Dispute #{dispute.id}</h5>
+                      <p><strong>Disputant:</strong> {dispute.disputant}</p>
+                      <p><strong>Defendant:</strong> {dispute.defendant}</p>
+                      <p><strong>Reward:</strong> {dispute.reward} GRULL</p>
+                      <p><strong>Deadline:</strong> {dispute.deadline}</p>
+                      <p><strong>Status:</strong> {dispute.resolved ? 'Resolved' : 'Active'}</p>
+                      <p><strong>Disputant Votes:</strong> {dispute.disputantVotes}</p>
+                      <p><strong>Defendant Votes:</strong> {dispute.defendantVotes}</p>
+                      
+                      {!dispute.resolved && dispute.jurors.includes(account) && (
+                        <div className="voting-actions">
+                          <button
+                            onClick={() => castVote(dispute.id, true)}
+                            disabled={isLoading}
+                          >
+                            Vote for Disputant
+                          </button>
+                          <button
+                            onClick={() => castVote(dispute.id, false)}
+                            disabled={isLoading}
+                          >
+                            Vote for Defendant
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
           
-          <div className="info-section">
-            <h2>Contract Information</h2>
-            <p>Minimum stake: {minimumStake} GRULL</p>
-            <p>Total staked: {totalStaked} GRULL</p>
+          <div className="contract-info">
+            <h3>Contract Information</h3>
+            <p><strong>Total Staked:</strong> {totalStaked} GRULL</p>
+            <p><strong>Minimum Stake:</strong> {minimumStake} GRULL</p>
+          </div>
+          
+          <div className="debug-info">
+            <h3>Debug Information</h3>
+            <p><strong>Debug Info:</strong> {debugInfo}</p>
+            <p><strong>Web3React Active:</strong> {active ? 'Yes' : 'No'}</p>
+            <p><strong>Account:</strong> {account || 'None'}</p>
+            <p><strong>Contract Initialized:</strong> {contract ? 'Yes' : 'No'}</p>
+            <p><strong>Token Contract Initialized:</strong> {tokenContract ? 'Yes' : 'No'}</p>
           </div>
         </>
       )}
