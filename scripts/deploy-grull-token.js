@@ -4,7 +4,7 @@ async function main() {
   const [deployer] = await hre.ethers.getSigners();
   console.log("Deploying contracts with the account:", deployer.address);
 
-  const GRULL = await hre.ethers.getContractFactory("GRULL");
+  const GRULL = await hre.ethers.getContractFactory("grull_token");
   const grull = await GRULL.deploy();
   await grull.waitForDeployment();
 
