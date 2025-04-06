@@ -4,7 +4,7 @@ async function main() {
   console.log("Starting deployment...");
 
   // Get the contract factories
-  const GRULLToken = await hre.ethers.getContractFactory("GRULLToken");
+  const GRULLToken = await hre.ethers.getContractFactory("grull_token");
   const JurorStaking = await hre.ethers.getContractFactory("JurorStaking");
 
   // Deploy GRULL Token

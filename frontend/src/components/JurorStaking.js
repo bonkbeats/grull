@@ -34,70 +34,96 @@ const JurorStaking = () => {
       try {
         setDebugInfo('Initializing contracts...');
         const provider = library;
-        
+
         // Create contract instances with provider
         const jurorStakingContract = new ethers.Contract(
           JUROR_STAKING_ADDRESS,
           JurorStakingABI.abi,
           provider
         );
-        
+
         const tokenContractInstance = new ethers.Contract(
           TOKEN_ADDRESS,
           TokenABI.abi,
           provider
         );
-        
+
         setContract(jurorStakingContract);
         setTokenContract(tokenContractInstance);
         setDebugInfo('Contracts initialized successfully');
+
+        // Load existing disputes
+        loadExistingDisputes(jurorStakingContract);
 
         // Verify the contract's ABI
         verifyContractABI(jurorStakingContract);
 
         // Add event listener for DisputeCreated
-        jurorStakingContract.on('DisputeCreated', (disputeId, disputant, defendant, reward, event) => {
-          console.log('Dispute Created:', { disputeId, disputant, defendant, reward });
-          
+        jurorStakingContract.on('DisputeCreated', (disputeId, disputant, defendant, reward, disputeReason, commitment, event) => {
+          console.log('Dispute Created Event:', {
+            disputeId,
+            disputant,
+            defendant,
+            reward,
+            disputeReason,
+            commitment,
+            event
+          });
+
           // Handle both ethers v5 and v6 event formats
-          let parsedDisputeId, parsedDisputant, parsedDefendant, parsedReward;
-          
+          let parsedDisputeId, parsedDisputant, parsedDefendant, parsedReward, parsedDisputeReason, parsedCommitment;
+
           if (typeof disputeId === 'object' && disputeId.args) {
             // ethers v5 format with event object
             parsedDisputeId = disputeId.args.disputeId;
             parsedDisputant = disputeId.args.disputant;
             parsedDefendant = disputeId.args.defendant;
             parsedReward = disputeId.args.reward;
+            parsedDisputeReason = disputeId.args.disputeReason;
+            parsedCommitment = disputeId.args.commitment;
           } else {
             // ethers v6 format or v5 with separate arguments
             parsedDisputeId = disputeId;
             parsedDisputant = disputant;
             parsedDefendant = defendant;
             parsedReward = reward;
+            parsedDisputeReason = disputeReason;
+            parsedCommitment = commitment;
           }
-          
+
+          setDebugInfo(`Processing new dispute: ID=${parsedDisputeId}, Disputant=${parsedDisputant}`);
+
           setDisputes((prevDisputes) => {
             // Check if dispute already exists
             const exists = prevDisputes.some(d => d.id === parsedDisputeId);
-            if (exists) return prevDisputes;
-            
+            if (exists) {
+              setDebugInfo(`Dispute ${parsedDisputeId} already exists, skipping`);
+              return prevDisputes;
+            }
+
             // Set the dispute ID state variable
             setDisputeId(parsedDisputeId.toString());
-            
-            return [
-              ...prevDisputes,
-              {
-                id: parsedDisputeId,
-                disputant: parsedDisputant, 
-                defendant: parsedDefendant,
-                reward: ethers.formatEther(parsedReward),
-                deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleString(),
-                resolved: false,
-                disputantVotes: '0',
-                defendantVotes: '0',
-                jurors: []
-              }
-            ];
+
+            const newDispute = {
+              id: parsedDisputeId,
+              disputant: parsedDisputant,
+              defendant: parsedDefendant,
+              reward: ethers.formatEther(parsedReward),
+              deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleString(),
+              resolved: false,
+              disputantVotes: '0',
+              defendantVotes: '0',
+              jurors: [],
+              disputeReason: parsedDisputeReason,
+              commitment: parsedCommitment,
+              disputantVerified: true,
+              defendantVerified: false,
+              verificationComplete: false
+            };
+
+            setDebugInfo(`Adding new dispute to state: ${JSON.stringify(newDispute)}`);
+
+            return [...prevDisputes, newDispute];
           });
         });
 
@@ -117,13 +143,13 @@ const JurorStaking = () => {
   const verifyContractABI = async (contractInstance) => {
     try {
       setDebugInfo('Verifying contract ABI...');
-      
+
       // Check if createDispute has the correct number of parameters
       const createDisputeFunction = contractInstance.interface.getFunction('createDispute');
       const paramCount = createDisputeFunction.inputs.length;
-      
+
       setDebugInfo(`createDispute function has ${paramCount} parameters`);
-      
+
       if (paramCount !== 4) {
         setDebugInfo('WARNING: createDispute function in ABI does not match the contract. Expected 4 parameters, found ' + paramCount);
         setError('Contract ABI mismatch detected. Please update the ABI file.');
@@ -144,7 +170,7 @@ const JurorStaking = () => {
         setDebugInfo('Cannot load user data: contract, account, or token contract is missing');
         return;
       }
-      
+
       setDebugInfo('Getting user stake...');
       // Get user stake
       let userStake;
@@ -156,7 +182,7 @@ const JurorStaking = () => {
         setDebugInfo('Error getting user stake, using 0 as fallback');
         setUserStake('0');
       }
-      
+
       setDebugInfo('Getting user token balance...');
       // Get user token balance
       let userBalance;
@@ -168,7 +194,7 @@ const JurorStaking = () => {
         setDebugInfo('Error getting user token balance, using 0 as fallback');
         setUserBalance('0');
       }
-      
+
       setDebugInfo('Getting juror rewards...');
       // Get juror rewards
       let rewards;
@@ -180,14 +206,14 @@ const JurorStaking = () => {
         setDebugInfo('Error getting juror rewards, using 0 as fallback');
         setJurorRewards('0');
       }
-      
+
       setDebugInfo('Checking token approval...');
       // Check if token is approved for staking
       try {
         const stakingAddress = await contract.getAddress();
         const allowance = await tokenContract.allowance(account, stakingAddress);
         const formattedAllowance = ethers.formatEther(allowance);
-        
+
         // Always update the approval state based on current allowance and stake amount
         if (stakeAmount && !isNaN(parseFloat(stakeAmount)) && parseFloat(stakeAmount) > 0) {
           const stakeAmountBN = ethers.parseEther(stakeAmount);
@@ -204,7 +230,7 @@ const JurorStaking = () => {
         setDebugInfo('Error checking token approval, assuming not approved');
         setIsApproved(false);
       }
-      
+
       setDebugInfo('User data loaded successfully');
     } catch (error) {
       console.error('Error loading user data:', error);
@@ -217,31 +243,31 @@ const JurorStaking = () => {
   const loadContractData = useCallback(async () => {
     try {
       if (!contract) return;
-      
+
       setDebugInfo('Loading contract data...');
-      
+
       // Load basic contract data
       const [totalStakedValue, minimumStakeValue] = await Promise.all([
         contract.totalStaked(),
         contract.minimumStake()
       ]);
-      
+
       setTotalStaked(ethers.formatEther(totalStakedValue));
       setMinimumStake(ethers.formatEther(minimumStakeValue));
-      
+
       // Load user data if connected
       if (account) {
         await loadUserData();
       }
-      
+
       // Load disputes
       const disputeCount = await contract.getDisputeCount();
       const loadedDisputes = [];
-      
+
       for (let i = 0; i < disputeCount; i++) {
         try {
           const disputeDetails = await contract.getDisputeDetails(i);
-          
+
           // Get the jurors array for this dispute
           let jurors = [];
           try {
@@ -259,7 +285,7 @@ const JurorStaking = () => {
               }
             }
           }
-          
+
           loadedDisputes.push({
             id: disputeDetails.id,
             disputant: disputeDetails.disputant,
@@ -281,7 +307,7 @@ const JurorStaking = () => {
           setDebugInfo(`Error loading dispute ${i}, skipping`);
         }
       }
-      
+
       setDisputes(loadedDisputes);
       setDebugInfo('Contract data loaded successfully');
     } catch (error) {
@@ -312,7 +338,7 @@ const JurorStaking = () => {
       const timer = setTimeout(() => {
         loadUserData();
       }, 300);
-      
+
       return () => clearTimeout(timer);
     }
   }, [contract, tokenContract, account, stakeAmount, loadUserData]);
@@ -323,7 +349,7 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo('Approving tokens...');
-      
+
       if (!tokenContract || !contract || !library) {
         throw new Error('Token contract, staking contract, or library not available');
       }
@@ -331,24 +357,24 @@ const JurorStaking = () => {
       if (!stakeAmount || isNaN(parseFloat(stakeAmount)) || parseFloat(stakeAmount) <= 0) {
         throw new Error('Please enter a valid stake amount greater than 0');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new token contract instance with the signer
       const tokenContractWithSigner = tokenContract.connect(signer);
-      
+
       // Get the staking contract address
       const stakingAddress = await contract.getAddress();
-      
+
       // Parse the approval amount as a string to avoid BigInt issues
       const amount = ethers.parseEther(stakeAmount);
-      
+
       // Check current allowance
       const currentAllowance = await tokenContract.allowance(account, stakingAddress);
       const formattedAllowance = ethers.formatEther(currentAllowance);
       setDebugInfo(`Current allowance: ${formattedAllowance} GRULL, Required: ${stakeAmount} GRULL`);
-      
+
       // If already approved with sufficient amount, skip approval
       if (currentAllowance >= amount) {
         setDebugInfo(`Tokens already approved with sufficient amount (${formattedAllowance} GRULL). You can proceed to stake.`);
@@ -356,22 +382,22 @@ const JurorStaking = () => {
         setIsLoading(false);
         return;
       }
-      
+
       setDebugInfo(`Approving ${stakeAmount} GRULL for staking...`);
-      
+
       // Use the signer to send the transaction
       const tx = await tokenContractWithSigner.approve(stakingAddress, amount);
       setDebugInfo('Approval transaction sent, waiting for confirmation...');
-      
+
       const receipt = await tx.wait();
       setDebugInfo('Approval transaction confirmed');
-      
+
       // Check if the approval was successful
       const newAllowance = await tokenContract.allowance(account, stakingAddress);
       const formattedNewAllowance = ethers.formatEther(newAllowance);
       const isApprovedAmount = newAllowance >= amount;
       setIsApproved(isApprovedAmount);
-      
+
       if (isApprovedAmount) {
         setDebugInfo(`Tokens approved successfully. Allowance: ${formattedNewAllowance} GRULL. You can now stake your tokens.`);
       } else {
@@ -379,16 +405,16 @@ const JurorStaking = () => {
       }
     } catch (error) {
       console.error('Error approving tokens:', error);
-      
+
       // Check for user rejection error
-      if (error.code === 'ACTION_REJECTED' || 
-          (error.message && error.message.includes('user rejected')) ||
-          (error.message && error.message.includes('User denied transaction'))) {
+      if (error.code === 'ACTION_REJECTED' ||
+        (error.message && error.message.includes('user rejected')) ||
+        (error.message && error.message.includes('User denied transaction'))) {
         setError('Transaction was rejected. Please confirm the transaction in MetaMask to approve tokens for staking.');
       } else {
         setError(`Error approving tokens: ${error.message}`);
       }
-      
+
       setDebugInfo(`Error approving tokens: ${error.message}`);
       setIsApproved(false);
     } finally {
@@ -402,7 +428,7 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo('Staking tokens...');
-      
+
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
@@ -414,42 +440,42 @@ const JurorStaking = () => {
       if (!isApproved) {
         throw new Error('Please approve tokens before staking');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
-      
+
       // Parse the stake amount as a string to avoid BigInt issues
       const amount = ethers.parseEther(stakeAmount);
       setDebugInfo(`Staking ${stakeAmount} tokens...`);
-      
+
       // Use the signer to send the transaction
       const tx = await contractWithSigner.stake(amount);
       setDebugInfo('Staking transaction sent, waiting for confirmation...');
-      
+
       const receipt = await tx.wait();
       setDebugInfo('Staking transaction confirmed');
-      
+
       // Reload data
       await loadUserData();
       await loadContractData();
-      
+
       setStakeAmount('');
       setDebugInfo('Tokens staked successfully');
     } catch (error) {
       console.error('Error staking tokens:', error);
-      
+
       // Check for user rejection error
-      if (error.code === 'ACTION_REJECTED' || 
-          (error.message && error.message.includes('user rejected')) ||
-          (error.message && error.message.includes('User denied transaction'))) {
+      if (error.code === 'ACTION_REJECTED' ||
+        (error.message && error.message.includes('user rejected')) ||
+        (error.message && error.message.includes('User denied transaction'))) {
         setError('Transaction was rejected. Please confirm the transaction in MetaMask to complete the staking process.');
       } else {
         setError(`Error staking tokens: ${error.message}`);
       }
-      
+
       setDebugInfo(`Error staking tokens: ${error.message}`);
     } finally {
       setIsLoading(false);
@@ -462,31 +488,31 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo('Unstaking tokens...');
-      
+
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
-      
+
       // Parse the unstake amount as a string to avoid BigInt issues
       const amount = ethers.parseEther(unstakeAmount);
       setDebugInfo(`Unstaking ${unstakeAmount} tokens...`);
-      
+
       // Use the signer to send the transaction
       const tx = await contractWithSigner.unstake(amount);
       setDebugInfo('Unstaking transaction sent, waiting for confirmation...');
-      
+
       await tx.wait();
-      
+
       // Reload data
       await loadUserData();
       await loadContractData();
-      
+
       setUnstakeAmount('');
       setDebugInfo('Tokens unstaked successfully');
     } catch (error) {
@@ -504,68 +530,58 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo('Creating dispute...');
-      
+
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
-      
+
       if (!defendantAddress || !reward || !disputeReason || !commitment) {
         throw new Error('All fields are required');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
-      
+
       // Parse the reward amount as a string to avoid BigInt issues
       const rewardAmount = ethers.parseEther(reward);
       setDebugInfo(`Creating dispute with defendant ${defendantAddress} and reward ${reward}...`);
-      
+
       // Log the function signature for debugging
       setDebugInfo(`Function signature: createDispute(address,uint256,string,string)`);
-      
+
       // Try to call the function with the updated signature
       let tx;
       try {
-        // First attempt with the updated signature (4 parameters)
+        // Call the function with all required parameters
         tx = await contractWithSigner.createDispute(
-          defendantAddress, 
+          defendantAddress,
           rewardAmount,
           disputeReason,
           commitment
         );
       } catch (error) {
-        // If that fails, try with the old signature (2 parameters)
-        setDebugInfo('First attempt failed, trying with old signature...');
-        try {
-          tx = await contractWithSigner.createDispute(
-            defendantAddress, 
-            rewardAmount
-          );
-          // If this succeeds, we need to update the ABI
-          setDebugInfo('Success with old signature. Please update the contract ABI.');
-        } catch (secondError) {
-          // If both attempts fail, throw the original error
-          throw error;
-        }
+        console.error('Error creating dispute:', error);
+        throw error;
       }
-      
+
       setDebugInfo('Dispute creation transaction sent, waiting for confirmation...');
-      
+
       // Wait for the transaction to be mined
       const receipt = await tx.wait();
       setDebugInfo('Transaction confirmed, processing receipt...');
-      
-      // Get the dispute ID from the event - handle different ethers.js versions
+
+      // Get the dispute ID from the event
       let disputeId;
-      
-      // Check if we're using ethers v6 (which has a different event structure)
-      if (receipt.logs) {
-        // ethers v6 format
-        setDebugInfo('Using ethers v6 format for events');
-        const disputeCreatedLog = receipt.logs.find(log => {
+      const disputeCreatedEvent = receipt.events?.find(event => event.event === 'DisputeCreated');
+
+      if (disputeCreatedEvent) {
+        disputeId = disputeCreatedEvent.args.disputeId;
+      } else {
+        // Try to parse from logs for ethers v6
+        const disputeCreatedLog = receipt.logs?.find(log => {
           try {
             const parsedLog = contract.interface.parseLog(log);
             return parsedLog && parsedLog.name === 'DisputeCreated';
@@ -573,26 +589,19 @@ const JurorStaking = () => {
             return false;
           }
         });
-        
+
         if (disputeCreatedLog) {
           const parsedLog = contract.interface.parseLog(disputeCreatedLog);
           disputeId = parsedLog.args.disputeId;
         }
-      } else if (receipt.events) {
-        // ethers v5 format
-        setDebugInfo('Using ethers v5 format for events');
-        const disputeCreatedEvent = receipt.events.find(event => event.event === 'DisputeCreated');
-        if (disputeCreatedEvent) {
-          disputeId = disputeCreatedEvent.args.disputeId;
-        }
       }
-      
+
       if (disputeId !== undefined) {
         setDebugInfo(`Dispute created with ID: ${disputeId}`);
-        
+
         // Set the dispute ID state variable
         setDisputeId(disputeId.toString());
-        
+
         // Add the new dispute to the state
         setDisputes(prevDisputes => [
           ...prevDisputes,
@@ -618,7 +627,7 @@ const JurorStaking = () => {
         // Fallback: reload all disputes
         await loadContractData();
       }
-      
+
       // Clear form fields
       setDefendantAddress('');
       setReward('');
@@ -640,34 +649,34 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo('Selecting jurors...');
-      
+
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
-      
+
       if (!disputeId) {
         throw new Error('Dispute ID is required');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
-      
+
       // Convert dispute ID to a number to avoid BigInt issues
       const parsedDisputeId = parseInt(disputeId, 10);
       setDebugInfo(`Selecting jurors for dispute ${disputeId}...`);
-      
+
       // Use the signer to send the transaction
       const tx = await contractWithSigner.selectJurors(parsedDisputeId);
       setDebugInfo('Juror selection transaction sent, waiting for confirmation...');
-      
+
       await tx.wait();
-      
+
       // Reload data
       await loadContractData();
-      
+
       setDisputeId('');
       setDebugInfo('Jurors selected successfully');
     } catch (error) {
@@ -685,30 +694,30 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo(`Casting vote for dispute ${disputeId}...`);
-      
+
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
-      
+
       // Convert dispute ID to a number to avoid BigInt issues
       const parsedDisputeId = parseInt(disputeId, 10);
       setDebugInfo(`Casting vote for dispute ${disputeId}, forDisputant: ${forDisputant}...`);
-      
+
       // Use the signer to send the transaction
       const tx = await contractWithSigner.castVote(parsedDisputeId, forDisputant);
       setDebugInfo('Vote transaction sent, waiting for confirmation...');
-      
+
       await tx.wait();
-      
+
       // Reload data
       await loadContractData();
-      
+
       setDebugInfo('Vote cast successfully');
     } catch (error) {
       console.error('Error casting vote:', error);
@@ -725,30 +734,30 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo(`Resolving dispute ${disputeId}...`);
-      
+
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
-      
+
       // Convert dispute ID to a number to avoid BigInt issues
       const parsedDisputeId = parseInt(disputeId, 10);
       setDebugInfo(`Resolving dispute ${disputeId}...`);
-      
+
       // Use the signer to send the transaction
       const tx = await contractWithSigner.resolveDispute(parsedDisputeId);
       setDebugInfo('Resolve transaction sent, waiting for confirmation...');
-      
+
       await tx.wait();
-      
+
       // Reload data
       await loadContractData();
-      
+
       setDebugInfo('Dispute resolved successfully');
     } catch (error) {
       console.error('Error resolving dispute:', error);
@@ -765,28 +774,28 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo('Claiming rewards...');
-      
+
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
-      
+
       setDebugInfo('Claiming rewards...');
-      
+
       // Use the signer to send the transaction
       const tx = await contractWithSigner.claimRewards();
       setDebugInfo('Reward claim transaction sent, waiting for confirmation...');
-      
+
       await tx.wait();
-      
+
       // Reload data
       await loadUserData();
-      
+
       setDebugInfo('Rewards claimed successfully');
     } catch (error) {
       console.error('Error claiming rewards:', error);
@@ -803,7 +812,7 @@ const JurorStaking = () => {
       if (!contract || !account) {
         return false;
       }
-      
+
       return await contract.isJuror(disputeId, account);
     } catch (error) {
       console.error('Error checking if user is a juror:', error);
@@ -817,7 +826,7 @@ const JurorStaking = () => {
       if (!contract) {
         return 1;
       }
-      
+
       return await contract.calculateWeight(ethers.parseEther(stakeAmount));
     } catch (error) {
       console.error('Error calculating weight:', error);
@@ -831,26 +840,26 @@ const JurorStaking = () => {
       setIsLoading(true);
       setError(null);
       setDebugInfo(`Verifying dispute ${disputeId}...`);
-      
+
       if (!contract || !account || !library) {
         throw new Error('Contract, account, or library not available');
       }
-      
+
       // Get signer from library
       const signer = await library.getSigner();
-      
+
       // Create a new contract instance with the signer
       const contractWithSigner = contract.connect(signer);
-      
+
       // Use the signer to send the transaction
       const tx = await contractWithSigner.verifyDispute(disputeId);
       setDebugInfo('Verification transaction sent, waiting for confirmation...');
-      
+
       await tx.wait();
-      
+
       // Reload data
       await loadContractData();
-      
+
       setDebugInfo('Dispute verified successfully');
     } catch (error) {
       console.error('Error verifying dispute:', error);
@@ -861,12 +870,55 @@ const JurorStaking = () => {
     }
   };
 
+  // Function to load existing disputes
+  const loadExistingDisputes = async (contract) => {
+    try {
+      setDebugInfo('Loading existing disputes...');
+      const disputeCount = await contract.getDisputeCount();
+      setDebugInfo(`Found ${disputeCount} disputes`);
+
+      const loadedDisputes = [];
+      for (let i = 0; i < disputeCount; i++) {
+        try {
+          const disputeDetails = await contract.getDisputeDetails(i);
+          setDebugInfo(`Loading dispute ${i}: ${JSON.stringify(disputeDetails)}`);
+
+          loadedDisputes.push({
+            id: disputeDetails.id,
+            disputant: disputeDetails.disputant,
+            defendant: disputeDetails.defendant,
+            reward: ethers.formatEther(disputeDetails.reward),
+            deadline: new Date(disputeDetails.deadline * 1000).toLocaleString(),
+            resolved: disputeDetails.resolved,
+            disputantVotes: disputeDetails.disputantVotes.toString(),
+            defendantVotes: disputeDetails.defendantVotes.toString(),
+            jurors: disputeDetails.jurors || [],
+            disputeReason: disputeDetails.disputeReason,
+            commitment: disputeDetails.commitment,
+            disputantVerified: disputeDetails.disputantVerified,
+            defendantVerified: disputeDetails.defendantVerified,
+            verificationComplete: disputeDetails.verificationComplete
+          });
+        } catch (error) {
+          console.error(`Error loading dispute ${i}:`, error);
+          setDebugInfo(`Error loading dispute ${i}: ${error.message}`);
+        }
+      }
+
+      setDisputes(loadedDisputes);
+      setDebugInfo(`Successfully loaded ${loadedDisputes.length} disputes`);
+    } catch (error) {
+      console.error('Error loading existing disputes:', error);
+      setDebugInfo(`Error loading existing disputes: ${error.message}`);
+    }
+  };
+
   return (
     <div className="juror-staking">
       <h2>GRULL Juror Staking</h2>
-      
+
       {error && <div className="error-message">{error}</div>}
-      
+
       {!active ? (
         <div className="connection-prompt">
           <p>Please connect your wallet to interact with the GRULL Juror Staking system.</p>
@@ -880,10 +932,10 @@ const JurorStaking = () => {
             <p><strong>Staked Amount:</strong> {userStake} GRULL</p>
             <p><strong>Available Rewards:</strong> {jurorRewards} GRULL</p>
           </div>
-          
+
           <div className="staking-actions">
             <h3>Staking Actions</h3>
-            
+
             <div className="action-group">
               <h4>Stake Tokens</h4>
               <p className="help-text">To stake tokens, first enter an amount, then approve the tokens, and finally click "Stake Tokens". You'll need to confirm each transaction in MetaMask.</p>
@@ -895,7 +947,7 @@ const JurorStaking = () => {
                     const value = e.target.value;
                     console.log('Stake amount changed:', value);
                     setStakeAmount(value);
-                    
+
                     // Reset approval state when amount changes
                     if (value && !isNaN(parseFloat(value)) && parseFloat(value) > 0) {
                       // If there's a valid amount, we'll check approval in loadUserData
@@ -933,7 +985,7 @@ const JurorStaking = () => {
                 </button>
               </div>
             </div>
-            
+
             <div className="action-group">
               <h4>Unstake Tokens</h4>
               <div className="input-group">
@@ -952,7 +1004,7 @@ const JurorStaking = () => {
                 </button>
               </div>
             </div>
-            
+
             <div className="action-group">
               <h4>Claim Rewards</h4>
               <button
@@ -963,10 +1015,10 @@ const JurorStaking = () => {
               </button>
             </div>
           </div>
-          
+
           <div className="disputes">
             <h3>Disputes</h3>
-            
+
             <div className="action-group">
               <h4>Create Dispute</h4>
               <div className="input-group">
@@ -1006,7 +1058,7 @@ const JurorStaking = () => {
                 </button>
               </div>
             </div>
-            
+
             <div className="action-group">
               <h4>Manage Dispute</h4>
               <div className="input-group">
@@ -1031,7 +1083,7 @@ const JurorStaking = () => {
                 </button>
               </div>
             </div>
-            
+
             <div className="disputes-list">
               <h4>Active Disputes</h4>
               {disputes.length === 0 ? (
@@ -1073,7 +1125,7 @@ const JurorStaking = () => {
                       </div>
                       <p><strong>Disputant Votes:</strong> {dispute.disputantVotes}</p>
                       <p><strong>Defendant Votes:</strong> {dispute.defendantVotes}</p>
-                      
+
                       {!dispute.resolved && !dispute.verificationComplete && account === dispute.defendant && (
                         <button
                           onClick={() => verifyDispute(dispute.id)}
@@ -1083,7 +1135,7 @@ const JurorStaking = () => {
                           {isLoading ? 'Verifying...' : 'Verify Dispute'}
                         </button>
                       )}
-                      
+
                       {!dispute.resolved && dispute.verificationComplete && dispute.jurors.includes(account) && (
                         <div className="voting-actions">
                           <button
@@ -1106,13 +1158,13 @@ const JurorStaking = () => {
               )}
             </div>
           </div>
-          
+
           <div className="contract-info">
             <h3>Contract Information</h3>
             <p><strong>Total Staked:</strong> {totalStaked} GRULL</p>
             <p><strong>Minimum Stake:</strong> {minimumStake} GRULL</p>
           </div>
-          
+
           <div className="debug-info">
             <h3>Debug Information</h3>
             <p><strong>Debug Info:</strong> {debugInfo}</p>

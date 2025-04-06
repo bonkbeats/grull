@@ -43,6 +43,8 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         uint256 reward;
         uint256 deadline;
         bool resolved;
+        string disputeReason;
+        string commitment;
         mapping(address => bool) hasVoted;
         mapping(address => bool) votedForDisputant;
         uint256 disputantVotes;
@@ -61,15 +63,24 @@ contract JurorStaking is Ownable, ReentrancyGuard {
     // Events
     event Staked(address indexed user, uint256 amount);
     event Unstaked(address indexed user, uint256 amount);
-    event DisputeCreated(uint256 indexed disputeId, address disputant, address defendant, uint256 reward);
+    event DisputeCreated(
+        uint256 indexed disputeId, 
+        address disputant, 
+        address defendant, 
+        uint256 reward,
+        string disputeReason,
+        string commitment
+    );
     event DisputeResolved(uint256 indexed disputeId, bool disputantWon);
     event JurorSelected(uint256 indexed disputeId, address juror, uint256 weight);
     event VoteCast(uint256 indexed disputeId, address juror, bool forDisputant);
     event RewardClaimed(address juror, uint256 amount);
     
-    constructor(address _grullToken, uint256 _minimumStake) {
+    // Constructor
+    constructor(address _grullToken) {
+        require(_grullToken != address(0), "Invalid token address");
         grullToken = IERC20(_grullToken);
-        minimumStake = _minimumStake;
+        minimumStake = 100 * 10**18; // 100 GRULL tokens minimum stake
     }
     
  
@@ -109,7 +120,12 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         emit Unstaked(msg.sender, _amount);
     }
     
-    function createDispute(address _defendant, uint256 _reward) external nonReentrant {
+    function createDispute(
+        address _defendant, 
+        uint256 _reward,
+        string memory _disputeReason,
+        string memory _commitment
+    ) external nonReentrant {
         require(_defendant != msg.sender, "Cannot dispute yourself");
         require(grullToken.transferFrom(msg.sender, address(this), _reward), "Transfer failed");
         
@@ -123,8 +139,17 @@ contract JurorStaking is Ownable, ReentrancyGuard {
         dispute.reward = _reward;
         dispute.deadline = block.timestamp + 7 days;
         dispute.resolved = false;
+        dispute.disputeReason = _disputeReason;
+        dispute.commitment = _commitment;
         
-        emit DisputeCreated(disputeId, msg.sender, _defendant, _reward);
+        emit DisputeCreated(
+            disputeId, 
+            msg.sender, 
+            _defendant, 
+            _reward,
+            _disputeReason,
+            _commitment
+        );
     }
    
     function selectJurors(uint256 _disputeId) external {
